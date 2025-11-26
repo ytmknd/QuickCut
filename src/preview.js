@@ -109,9 +109,12 @@ export class PreviewPlayer {
     }
 
     async render(time, shouldSeek = true) {
+        // Get all video/image clips for opacity calculation
+        const allVideoClips = this.app.timelineManager.getAllClips().filter(c => c.type === 'video' || c.type === 'image');
+        
         // Get clips at current time
-        const clips = this.app.timelineManager.getAllClips().filter(clip =>
-            time >= clip.startTime && time < clip.startTime + clip.duration && clip.type === 'video'
+        const clips = allVideoClips.filter(clip =>
+            time >= clip.startTime && time < clip.startTime + clip.duration
         );
 
         // Sort by track (v1 first, then v2 on top)
@@ -130,84 +133,146 @@ export class PreviewPlayer {
 
         // If no clips, just return
         if (clips.length === 0) {
-            return;
-        }
+            // Still need to process audio
+        } else {
+            // Process and draw clips in order (bottom to top)
+            for (const clip of clips) {
+                const asset = this.app.assetsManager.getAssetById(clip.assetId);
+                if (!asset) continue;
 
-        // Process and draw clips in order (bottom to top)
-        for (const clip of clips) {
-            const asset = this.app.assetsManager.getAssetById(clip.assetId);
-            if (!asset) continue;
-
-            // Handle image clips
-            if (clip.isImage) {
-                await this.renderImageClip(clip, asset);
-                continue;
-            }
-
-            // Get or create video element for this specific clip
-            let videoEl = this.getVideoElementForClip(clip.id);
-            if (!videoEl) {
-                videoEl = document.createElement('video');
-                videoEl.src = asset.url;
-                videoEl.dataset.assetId = asset.id;
-                videoEl.dataset.clipId = clip.id;
-                videoEl.muted = true;
-                videoEl.preload = 'auto';
-                this.videoPool.push(videoEl);
+                // Calculate Opacity for Fade
+                let opacity = 1.0;
                 
-                // Wait for video to load
-                await new Promise((resolve) => {
-                    if (videoEl.readyState >= 1) {
-                        resolve();
-                    } else {
-                        videoEl.addEventListener('loadedmetadata', () => resolve(), { once: true });
-                        videoEl.load();
-                    }
-                });
-            }
-
-            // Calculate video time relative to clip
-            // Consider trimStart offset for cut clips
-            const clipLocalTime = time - clip.startTime;
-            const videoTime = clipLocalTime + (clip.trimStart || 0);
-            
-            // Seek if needed
-            if (shouldSeek && Math.abs(videoEl.currentTime - videoTime) > 0.1) {
-                videoEl.currentTime = videoTime;
+                // 1. Check for overlap with NEXT clips (Fade Out)
+                // Find clips that start while this clip is playing
+                const nextClips = allVideoClips.filter(c => 
+                    c.id !== clip.id &&
+                    c.startTime > clip.startTime &&
+                    c.startTime < (clip.startTime + clip.duration)
+                );
                 
-                // Wait for seek to complete and frame to be ready
-                await new Promise((resolve) => {
-                    if (videoEl.readyState >= 2) {
-                        resolve();
-                    } else {
-                        const onSeeked = () => {
-                            videoEl.removeEventListener('seeked', onSeeked);
-                            // Wait one more frame to ensure frame is ready
-                            requestAnimationFrame(() => resolve());
-                        };
-                        videoEl.addEventListener('seeked', onSeeked);
-                        
-                        // Timeout fallback
-                        setTimeout(() => {
-                            videoEl.removeEventListener('seeked', onSeeked);
-                            resolve();
-                        }, 100);
+                for (const nextClip of nextClips) {
+                    const overlapStart = nextClip.startTime;
+                    const overlapEnd = Math.min(clip.startTime + clip.duration, nextClip.startTime + nextClip.duration);
+                    const overlapDuration = overlapEnd - overlapStart;
+                    
+                    // Fade out in the first half of overlap
+                    const fadeOutEnd = overlapStart + (overlapDuration / 2);
+                    
+                    if (time >= overlapStart && time <= fadeOutEnd) {
+                        // 1.0 -> 0.0
+                        const progress = (time - overlapStart) / (overlapDuration / 2);
+                        opacity = Math.min(opacity, 1.0 - progress);
+                    } else if (time > fadeOutEnd && time < overlapEnd) {
+                        opacity = 0.0;
                     }
-                });
-            }
-
-            // Draw video frame on top of previous layers
-            try {
-                if (videoEl.readyState >= 2) { // HAVE_CURRENT_DATA
-                    this.ctx.drawImage(videoEl, 0, 0, this.canvas.width, this.canvas.height);
                 }
-            } catch (e) {
-                console.error('Error drawing video frame:', e);
-            }
+                
+                // 2. Check for overlap with PREVIOUS clips (Fade In)
+                // Find clips that started before this clip and are still playing
+                const prevClips = allVideoClips.filter(c => 
+                    c.id !== clip.id &&
+                    c.startTime < clip.startTime &&
+                    (c.startTime + c.duration) > clip.startTime
+                );
+                
+                for (const prevClip of prevClips) {
+                    const overlapStart = clip.startTime;
+                    const overlapEnd = Math.min(prevClip.startTime + prevClip.duration, clip.startTime + clip.duration);
+                    const overlapDuration = overlapEnd - overlapStart;
+                    
+                    // Fade in in the second half of overlap
+                    const fadeInStart = overlapStart + (overlapDuration / 2);
+                    
+                    if (time >= fadeInStart && time <= overlapEnd) {
+                        // 0.0 -> 1.0
+                        const progress = (time - fadeInStart) / (overlapDuration / 2);
+                        opacity = Math.min(opacity, progress);
+                    } else if (time >= overlapStart && time < fadeInStart) {
+                        opacity = 0.0;
+                    }
+                }
+                
+                opacity = Math.max(0, Math.min(1, opacity));
 
-            // Play video if in play mode
-            if (this.isPlaying && videoEl.paused) {
-                videoEl.play().catch(e => console.error('Error playing video:', e));
+                // Apply opacity
+                this.ctx.save();
+                this.ctx.globalAlpha = opacity;
+
+                // Handle image clips
+                if (clip.isImage) {
+                    await this.renderImageClip(clip, asset);
+                    this.ctx.restore();
+                    continue;
+                }
+
+                // Get or create video element for this specific clip
+                let videoEl = this.getVideoElementForClip(clip.id);
+                if (!videoEl) {
+                    videoEl = document.createElement('video');
+                    videoEl.src = asset.url;
+                    videoEl.dataset.assetId = asset.id;
+                    videoEl.dataset.clipId = clip.id;
+                    videoEl.muted = true;
+                    videoEl.preload = 'auto';
+                    this.videoPool.push(videoEl);
+                    
+                    // Wait for video to load
+                    await new Promise((resolve) => {
+                        if (videoEl.readyState >= 1) {
+                            resolve();
+                        } else {
+                            videoEl.addEventListener('loadedmetadata', () => resolve(), { once: true });
+                            videoEl.load();
+                        }
+                    });
+                }
+
+                // Calculate video time relative to clip
+                // Consider trimStart offset for cut clips
+                const clipLocalTime = time - clip.startTime;
+                const videoTime = clipLocalTime + (clip.trimStart || 0);
+                
+                // Seek if needed
+                if (shouldSeek && Math.abs(videoEl.currentTime - videoTime) > 0.1) {
+                    videoEl.currentTime = videoTime;
+                    
+                    // Wait for seek to complete and frame to be ready
+                    await new Promise((resolve) => {
+                        if (videoEl.readyState >= 2) {
+                            resolve();
+                        } else {
+                            const onSeeked = () => {
+                                videoEl.removeEventListener('seeked', onSeeked);
+                                // Wait one more frame to ensure frame is ready
+                                requestAnimationFrame(() => resolve());
+                            };
+                            videoEl.addEventListener('seeked', onSeeked);
+                            
+                            // Timeout fallback
+                            setTimeout(() => {
+                                videoEl.removeEventListener('seeked', onSeeked);
+                                resolve();
+                            }, 100);
+                        }
+                    });
+                }
+
+                // Draw video frame on top of previous layers
+                try {
+                    if (videoEl.readyState >= 2) { // HAVE_CURRENT_DATA
+                        this.ctx.drawImage(videoEl, 0, 0, this.canvas.width, this.canvas.height);
+                    }
+                } catch (e) {
+                    console.error('Error drawing video frame:', e);
+                }
+
+                this.ctx.restore(); // Restore globalAlpha
+
+                // Play video if in play mode
+                if (this.isPlaying && videoEl.paused) {
+                    videoEl.play().catch(e => console.error('Error playing video:', e));
+                }
             }
         }
 

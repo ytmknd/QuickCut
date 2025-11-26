@@ -305,9 +305,17 @@ export class Exporter {
             let inputArgs = [];
             let audioStreams = [];
             
-            // Add inputs
-            for (let i = 0; i < assetIds.length; i++) {
-                inputArgs.push('-i', assetMap[assetIds[i]].filename);
+            // Add an input for EACH clip to avoid 'split' filter deadlocks
+            // (When a single input is split and trimmed differently, one branch can block the other)
+            // Use seeking (-ss) to avoid decoding the entire file for each clip
+            for (let i = 0; i < sortedClips.length; i++) {
+                const clip = sortedClips[i];
+                const assetInfo = assetMap[clip.assetId];
+                
+                if (assetInfo.asset.type === 'video' || assetInfo.asset.type === 'audio') {
+                    inputArgs.push('-ss', (clip.trimStart || 0).toString());
+                }
+                inputArgs.push('-i', assetInfo.filename);
             }
 
             // --- Video Processing ---
@@ -318,13 +326,18 @@ export class Exporter {
             // Process each clip for Video
             for (let i = 0; i < sortedClips.length; i++) {
                 const clip = sortedClips[i];
-                const { index: inputIndex, asset } = assetMap[clip.assetId];
+                const { asset } = assetMap[clip.assetId];
+                // Use the specific input index for this clip (which corresponds to its index in sortedClips)
+                const inputIndex = i;
+
                 const clipLabel = `v${i}`;
                 const nextStream = i === sortedClips.length - 1 ? '[outv]' : `[tmp${i}]`;
                 
                 // Skip audio-only clips for video processing
                 if (asset.type === 'audio') continue;
 
+                let inputStream = `[${inputIndex}:v]`;
+                
                 let overlayX = 0;
                 let overlayY = 0;
                 let clipFilterChain = '';
@@ -335,12 +348,67 @@ export class Exporter {
                     overlayY = clip.imageY || 0;
 
                     // Ensure dimensions are even for libx264
-                    clipFilterChain = `[${inputIndex}:v]loop=loop=-1:size=1:start=0,scale=trunc(iw*${imgScale}/2)*2:trunc(ih*${imgScale}/2)*2,trim=duration=${clip.duration},setpts=PTS-STARTPTS+${clip.startTime}/TB[${clipLabel}]`;
+                    clipFilterChain = `${inputStream}loop=loop=-1:size=1:start=0,scale=trunc(iw*${imgScale}/2)*2:trunc(ih*${imgScale}/2)*2,trim=duration=${clip.duration},setpts=PTS-STARTPTS+${clip.startTime}/TB`;
                 } else {
                     // Video: Scale to fit 1280x720 with black bars
-                    clipFilterChain = `[${inputIndex}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,trim=start=${clip.trimStart || 0}:duration=${clip.duration},setpts=PTS-STARTPTS+${clip.startTime}/TB[${clipLabel}]`;
+                    // Since we used -ss on input, trim start is effectively 0 relative to the input stream
+                    clipFilterChain = `${inputStream}scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,trim=duration=${clip.duration},setpts=PTS-STARTPTS+${clip.startTime}/TB`;
+                }
+
+
+                
+                // Always convert to yuva420p for consistent alpha handling and fading
+                clipFilterChain += `,format=yuva420p`;
+
+                // Apply Fade Effects
+                let fadeFilters = [];
+                
+                // 1. Fade Out (overlap with next clips)
+                const nextClips = sortedClips.filter(c => 
+                    c.id !== clip.id &&
+                    c.startTime > clip.startTime &&
+                    c.startTime < (clip.startTime + clip.duration) &&
+                    (c.type === 'video' || c.type === 'image')
+                );
+                
+                for (const nextClip of nextClips) {
+                    const overlapStart = nextClip.startTime;
+                    const overlapEnd = Math.min(clip.startTime + clip.duration, nextClip.startTime + nextClip.duration);
+                    const overlapDuration = overlapEnd - overlapStart;
+                    const fadeOutDuration = overlapDuration / 2;
+                    
+                    if (fadeOutDuration > 0) {
+                        // fade=t=out:st=START:d=DURATION:alpha=1
+                        fadeFilters.push(`fade=t=out:st=${overlapStart}:d=${fadeOutDuration}:alpha=1`);
+                    }
                 }
                 
+                // 2. Fade In (overlap with previous clips)
+                const prevClips = sortedClips.filter(c => 
+                    c.id !== clip.id &&
+                    c.startTime < clip.startTime &&
+                    (c.startTime + c.duration) > clip.startTime &&
+                    (c.type === 'video' || c.type === 'image')
+                );
+                
+                for (const prevClip of prevClips) {
+                    const overlapStart = clip.startTime;
+                    const overlapEnd = Math.min(prevClip.startTime + prevClip.duration, clip.startTime + clip.duration);
+                    const overlapDuration = overlapEnd - overlapStart;
+                    const fadeInStart = overlapStart + (overlapDuration / 2);
+                    const fadeInDuration = overlapDuration / 2;
+                    
+                    if (fadeInDuration > 0) {
+                        // fade=t=in:st=START:d=DURATION:alpha=1
+                        fadeFilters.push(`fade=t=in:st=${fadeInStart}:d=${fadeInDuration}:alpha=1`);
+                    }
+                }
+                
+                if (fadeFilters.length > 0) {
+                    clipFilterChain += `,${fadeFilters.join(',')}`;
+                }
+                
+                clipFilterChain += `[${clipLabel}]`;
                 filterParts.push(clipFilterChain);
 
                 // Overlay onto current stream
@@ -360,10 +428,12 @@ export class Exporter {
             // --- Audio Processing ---
             for (let i = 0; i < sortedClips.length; i++) {
                 const clip = sortedClips[i];
-                const { index: inputIndex, asset } = assetMap[clip.assetId];
+                const { asset } = assetMap[clip.assetId];
+                const inputIndex = i;
                 
                 // Skip images
                 if (asset.type === 'image') continue;
+
 
                 // Skip videos with no audio track
                 if (asset.type === 'video' && !this.app.assetsManager.getWaveformData(asset.id)) {
@@ -372,7 +442,8 @@ export class Exporter {
                 }
 
                 const clipLabel = `a${i}`;
-                const trimStart = clip.trimStart || 0;
+                // Since we used -ss on input, trim start is effectively 0 relative to the input stream
+                const trimStart = 0; 
                 const duration = clip.duration;
                 const startTimeMs = Math.round(clip.startTime * 1000);
                 const gain = clip.gain || 0; // dB
@@ -408,7 +479,9 @@ export class Exporter {
 
             // Execute FFmpeg
             const outputFilename = 'output.mp4';
-            const execPromise = this.ffmpeg.exec([
+            
+            // Build FFmpeg arguments
+            const ffmpegArgs = [
                 ...inputArgs,
                 '-filter_complex', filterComplex,
                 '-map', '[outv]',
@@ -419,7 +492,13 @@ export class Exporter {
                 '-pix_fmt', 'yuv420p',
                 '-r', fps.toString(),
                 outputFilename
-            ]);
+            ];
+            
+            // If no audio streams, we still want to include the silent audio track generated above
+            // so we do NOT remove the audio mapping.
+
+
+            const execPromise = this.ffmpeg.exec(ffmpegArgs);
 
             // Wait for execution or abort
             await Promise.race([
