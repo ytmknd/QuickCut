@@ -1,0 +1,333 @@
+export class PreviewPlayer {
+    constructor(app) {
+        this.app = app;
+        this.canvas = document.getElementById('preview-canvas');
+        this.ctx = this.canvas.getContext('2d');
+        this.playBtn = document.getElementById('play-pause-btn');
+        this.timeDisplay = document.getElementById('time-display');
+
+        this.isPlaying = false;
+        this.animationFrame = null;
+        this.lastTime = 0;
+
+        // Set canvas size
+        this.canvas.width = 1280;
+        this.canvas.height = 720;
+
+        // Active video elements pool
+        this.videoPool = [];
+        this.audioPool = [];
+
+        this.initListeners();
+    }
+
+    initListeners() {
+        this.playBtn.addEventListener('click', () => {
+            this.togglePlay();
+        });
+        
+        const playFromStartBtn = document.getElementById('play-from-start-btn');
+        if (playFromStartBtn) {
+            playFromStartBtn.addEventListener('click', () => {
+                this.playFromStart();
+            });
+        }
+    }
+
+    togglePlay() {
+        this.isPlaying = !this.isPlaying;
+        this.playBtn.textContent = this.isPlaying ? '⏸' : '▶';
+
+        if (this.isPlaying) {
+            this.lastTime = performance.now();
+            this.loop();
+        } else {
+            cancelAnimationFrame(this.animationFrame);
+            this.pauseAllVideos();
+        }
+    }
+
+    playFromStart() {
+        // Stop current playback if playing
+        if (this.isPlaying) {
+            this.isPlaying = false;
+            cancelAnimationFrame(this.animationFrame);
+            this.pauseAllVideos();
+        }
+        
+        // Seek to start
+        this.app.timelineManager.currentTime = 0;
+        this.seek(0);
+        
+        // Update playhead position
+        this.app.timelineManager.playhead.style.transform = 'translateX(0px)';
+        
+        // Start playing
+        this.isPlaying = true;
+        this.playBtn.textContent = '⏸';
+        this.lastTime = performance.now();
+        this.loop();
+    }
+
+    pauseAllVideos() {
+        this.videoPool.forEach(v => v.pause());
+        this.audioPool.forEach(a => a.pause());
+    }
+
+    loop() {
+        if (!this.isPlaying) return;
+
+        const now = performance.now();
+        const dt = (now - this.lastTime) / 1000;
+        this.lastTime = now;
+
+        this.app.timelineManager.currentTime += dt;
+
+        // Update playhead position visually
+        const x = this.app.timelineManager.currentTime * this.app.timelineManager.zoom;
+        this.app.timelineManager.playhead.style.transform = `translateX(${x}px)`;
+
+        this.render(this.app.timelineManager.currentTime);
+        this.updateTimeDisplay(this.app.timelineManager.currentTime);
+
+        // Get actual timeline duration based on clips
+        const timelineDuration = this.app.timelineManager.getTimelineDuration();
+        
+        if (this.app.timelineManager.currentTime >= timelineDuration) {
+            this.togglePlay();
+            this.app.timelineManager.currentTime = 0;
+            this.seek(0);
+        } else {
+            this.animationFrame = requestAnimationFrame(() => this.loop());
+        }
+    }
+
+    seek(time) {
+        this.pauseAllVideos();
+        this.render(time);
+        this.updateTimeDisplay(time);
+    }
+
+    async render(time, shouldSeek = true) {
+        // Get clips at current time
+        const clips = this.app.timelineManager.getAllClips().filter(clip =>
+            time >= clip.startTime && time < clip.startTime + clip.duration && clip.type === 'video'
+        );
+
+        // Sort by track (v1 first, then v2 on top)
+        clips.sort((a, b) => {
+            if (a.trackId === 'v1' && b.trackId === 'v2') return -1;
+            if (a.trackId === 'v2' && b.trackId === 'v1') return 1;
+            return 0;
+        });
+
+        // Clear canvas first with opaque black background
+        this.ctx.save();
+        this.ctx.globalCompositeOperation = 'source-over';
+        this.ctx.fillStyle = '#000';
+        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+        this.ctx.restore();
+
+        // If no clips, just return
+        if (clips.length === 0) {
+            return;
+        }
+
+        // Process and draw clips in order (bottom to top)
+        for (const clip of clips) {
+            const asset = this.app.assetsManager.getAssetById(clip.assetId);
+            if (!asset) continue;
+
+            // Handle image clips
+            if (clip.isImage) {
+                await this.renderImageClip(clip, asset);
+                continue;
+            }
+
+            // Get or create video element for this specific clip
+            let videoEl = this.getVideoElementForClip(clip.id);
+            if (!videoEl) {
+                videoEl = document.createElement('video');
+                videoEl.src = asset.url;
+                videoEl.dataset.assetId = asset.id;
+                videoEl.dataset.clipId = clip.id;
+                videoEl.muted = true;
+                videoEl.preload = 'auto';
+                this.videoPool.push(videoEl);
+                
+                // Wait for video to load
+                await new Promise((resolve) => {
+                    if (videoEl.readyState >= 1) {
+                        resolve();
+                    } else {
+                        videoEl.addEventListener('loadedmetadata', () => resolve(), { once: true });
+                        videoEl.load();
+                    }
+                });
+            }
+
+            // Calculate video time relative to clip
+            // Consider trimStart offset for cut clips
+            const clipLocalTime = time - clip.startTime;
+            const videoTime = clipLocalTime + (clip.trimStart || 0);
+            
+            // Seek if needed
+            if (shouldSeek && Math.abs(videoEl.currentTime - videoTime) > 0.1) {
+                videoEl.currentTime = videoTime;
+                
+                // Wait for seek to complete and frame to be ready
+                await new Promise((resolve) => {
+                    if (videoEl.readyState >= 2) {
+                        resolve();
+                    } else {
+                        const onSeeked = () => {
+                            videoEl.removeEventListener('seeked', onSeeked);
+                            // Wait one more frame to ensure frame is ready
+                            requestAnimationFrame(() => resolve());
+                        };
+                        videoEl.addEventListener('seeked', onSeeked);
+                        
+                        // Timeout fallback
+                        setTimeout(() => {
+                            videoEl.removeEventListener('seeked', onSeeked);
+                            resolve();
+                        }, 100);
+                    }
+                });
+            }
+
+            // Draw video frame on top of previous layers
+            try {
+                if (videoEl.readyState >= 2) { // HAVE_CURRENT_DATA
+                    this.ctx.drawImage(videoEl, 0, 0, this.canvas.width, this.canvas.height);
+                }
+            } catch (e) {
+                console.error('Error drawing video frame:', e);
+            }
+
+            // Play video if in play mode
+            if (this.isPlaying && videoEl.paused) {
+                videoEl.play().catch(e => console.error('Error playing video:', e));
+            }
+        }
+
+        // Pause videos that are no longer in the current clips list
+        if (this.isPlaying) {
+            this.videoPool.forEach(v => {
+                const isUsed = clips.some(c => c.id === v.dataset.clipId);
+                if (!isUsed && !v.paused) {
+                    v.pause();
+                }
+            });
+        }
+
+        // Handle Audio Clips
+        const audioClips = this.app.timelineManager.getAllClips().filter(clip =>
+            time >= clip.startTime && time < clip.startTime + clip.duration && clip.type === 'audio'
+        );
+
+        for (const clip of audioClips) {
+            const asset = this.app.assetsManager.getAssetById(clip.assetId);
+            if (!asset) continue;
+
+            let audioEl = this.getAudioElementForClip(clip.id);
+            if (!audioEl) {
+                audioEl = new Audio();
+                audioEl.src = asset.url;
+                audioEl.dataset.clipId = clip.id;
+                audioEl.preload = 'auto';
+                this.audioPool.push(audioEl);
+            }
+
+            // Calculate time
+            const clipLocalTime = time - clip.startTime;
+            const audioTime = clipLocalTime + (clip.trimStart || 0);
+
+            // Apply Gain
+            const gainDB = clip.gain || 0;
+            // Convert dB to linear: 10^(dB/20)
+            let volume = Math.pow(10, gainDB / 20);
+            // Clamp to 0-1 for HTML Audio
+            volume = Math.max(0, Math.min(1, volume));
+            audioEl.volume = volume;
+
+            // Sync Time
+            if (shouldSeek && Math.abs(audioEl.currentTime - audioTime) > 0.2) {
+                audioEl.currentTime = audioTime;
+            }
+
+            // Play
+            if (this.isPlaying && audioEl.paused) {
+                audioEl.play().catch(e => console.error('Error playing audio:', e));
+            }
+        }
+
+        // Pause unused audio
+        if (this.isPlaying) {
+            this.audioPool.forEach(a => {
+                const isUsed = audioClips.some(c => c.id === a.dataset.clipId);
+                if (!isUsed && !a.paused) {
+                    a.pause();
+                }
+            });
+        }
+    }
+
+    getVideoElementForClip(clipId) {
+        return this.videoPool.find(v => v.dataset.clipId === clipId);
+    }
+
+    getAudioElementForClip(clipId) {
+        return this.audioPool.find(a => a.dataset.clipId === clipId);
+    }
+
+    getVideoElement(assetId) {
+        return this.videoPool.find(v => v.dataset.assetId === assetId);
+    }
+
+    async renderImageClip(clip, asset) {
+        // Load image if not already loaded
+        if (!asset.imageElement) {
+            asset.imageElement = new Image();
+            asset.imageElement.src = asset.url;
+            
+            // Wait for image to load
+            if (!asset.imageElement.complete) {
+                await new Promise((resolve, reject) => {
+                    asset.imageElement.onload = resolve;
+                    asset.imageElement.onerror = reject;
+                });
+            }
+        }
+
+        const img = asset.imageElement;
+        const scale = clip.imageScale || 1.0;
+        const x = clip.imageX || 0;
+        const y = clip.imageY || 0;
+
+        // Calculate scaled dimensions
+        const scaledWidth = img.naturalWidth * scale;
+        const scaledHeight = img.naturalHeight * scale;
+
+        // Save current composite operation
+        const prevComposite = this.ctx.globalCompositeOperation;
+        
+        // Use source-over to properly blend transparent pixels
+        this.ctx.globalCompositeOperation = 'source-over';
+
+        // Draw image at specified position and scale
+        // The canvas will automatically handle alpha transparency
+        this.ctx.drawImage(img, x, y, scaledWidth, scaledHeight);
+        
+        // Restore composite operation
+        this.ctx.globalCompositeOperation = prevComposite;
+    }
+
+    updateTimeDisplay(time) {
+        this.timeDisplay.textContent = this.app.timelineManager.formatTime(time);
+    }
+
+    handleResize() {
+        // Handle canvas responsiveness if needed
+    }
+}

@@ -1,0 +1,552 @@
+:root {
+    --bg-dark: #121212;
+    --bg-panel: #1e1e1e;
+    --bg-track: #2a2a2a;
+    --accent: #6200ee;
+    --accent-hover: #7c4dff;
+    --text-primary: #ffffff;
+    --text-secondary: #b0b0b0;
+    --border: #333;
+    --track-video: #3d5afe;
+    --track-audio: #00e676;
+    --playhead: #ff1744;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: 'Inter', sans-serif;
+    background-color: var(--bg-dark);
+    color: var(--text-primary);
+    height: 100vh;
+    overflow: hidden;
+}
+
+.app-container {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+/* Header */
+.app-header {
+    height: 50px;
+    background-color: var(--bg-panel);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 20px;
+}
+
+.server-warning {
+    background-color: #ff9800;
+    color: #000;
+    padding: 8px 20px;
+    text-align: center;
+    font-size: 14px;
+    font-weight: 600;
+    border-bottom: 1px solid #f57c00;
+}
+
+.server-warning code {
+    background-color: rgba(0, 0, 0, 0.2);
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-family: 'Courier New', monospace;
+}
+
+.logo {
+    font-weight: bold;
+    font-size: 1.2rem;
+    color: var(--accent-hover);
+}
+
+.btn {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 600;
+    transition: background 0.2s;
+}
+
+.btn-primary {
+    background-color: var(--accent);
+    color: white;
+}
+
+.btn-primary:hover {
+    background-color: var(--accent-hover);
+}
+
+.btn-secondary {
+    background-color: #424242;
+    color: white;
+}
+
+.btn-secondary:hover {
+    background-color: #535353;
+}
+
+.btn-danger {
+    background-color: #c62828;
+    color: white;
+}
+
+.btn-danger:hover {
+    background-color: #d32f2f;
+}
+
+/* Main Layout */
+.main-layout {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+}
+
+.sidebar-left {
+    width: 300px;
+    background-color: var(--bg-panel);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+}
+
+.sidebar-right {
+    width: 280px;
+    background-color: var(--bg-panel);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+}
+
+.panel-header {
+    padding: 10px;
+    font-weight: 600;
+    border-bottom: 1px solid var(--border);
+    background-color: #252525;
+}
+
+.assets-container {
+    flex: 1;
+    padding: 10px;
+    overflow-y: auto;
+}
+
+.upload-area {
+    border: 2px dashed var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    text-align: center;
+    cursor: pointer;
+    color: var(--text-secondary);
+    transition: border-color 0.2s;
+}
+
+.upload-area:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.assets-list {
+    margin-top: 20px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+    gap: 10px;
+}
+
+.asset-item {
+    background-color: #333;
+    border-radius: 4px;
+    overflow: hidden;
+    cursor: grab;
+    position: relative;
+    aspect-ratio: 16/9;
+}
+
+.asset-item video, .asset-item img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.asset-name {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: rgba(0,0,0,0.7);
+    font-size: 10px;
+    padding: 2px 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.asset-delete-btn {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: 24px;
+    height: 24px;
+    background-color: rgba(198, 40, 40, 0.9);
+    color: white;
+    border: none;
+    border-radius: 50%;
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    transition: background-color 0.2s;
+    z-index: 10;
+}
+
+.asset-item:hover .asset-delete-btn {
+    display: flex;
+}
+
+.asset-delete-btn:hover {
+    background-color: rgba(211, 47, 47, 1);
+}
+
+/* Preview Area */
+.preview-area {
+    flex: 1;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background-color: #000;
+    position: relative;
+}
+
+.preview-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+}
+
+canvas#preview-canvas {
+    max-width: 100%;
+    max-height: 60vh;
+    background-color: #000;
+    box-shadow: 0 0 20px rgba(0,0,0,0.5);
+}
+
+.preview-controls {
+    display: flex;
+    gap: 15px;
+    align-items: center;
+    background: rgba(30,30,30,0.8);
+    padding: 8px 20px;
+    border-radius: 20px;
+}
+
+.icon-btn {
+    background: none;
+    border: none;
+    color: white;
+    font-size: 1.2rem;
+    cursor: pointer;
+}
+
+/* Properties Panel */
+.properties-content {
+    padding: 15px;
+    overflow-y: auto;
+}
+
+.no-selection {
+    color: var(--text-secondary);
+    text-align: center;
+    padding: 20px;
+}
+
+.property-group {
+    margin-bottom: 15px;
+}
+
+.property-label {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    margin-bottom: 5px;
+}
+
+.property-value {
+    font-size: 0.9rem;
+    color: var(--text-primary);
+    padding: 5px 0;
+}
+
+.property-input {
+    width: 100%;
+    padding: 6px 8px;
+    background-color: var(--bg-track);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-size: 0.9rem;
+}
+
+.property-input:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+/* Timeline */
+.timeline-area {
+    height: 300px;
+    background-color: var(--bg-panel);
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+}
+
+.timeline-header {
+    height: 30px;
+    display: flex;
+    border-bottom: 1px solid var(--border);
+    position: relative;
+}
+
+.timeline-zoom-controls {
+    position: absolute;
+    top: 2px;
+    right: 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background-color: rgba(30, 30, 30, 0.9);
+    padding: 3px 8px;
+    border-radius: 4px;
+    z-index: 10;
+}
+
+.zoom-btn {
+    width: 22px;
+    height: 22px;
+    border: 1px solid var(--border);
+    background-color: var(--bg-panel);
+    color: var(--text-primary);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: bold;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background-color 0.2s;
+    padding: 0;
+}
+
+.zoom-btn:hover {
+    background-color: var(--bg-track);
+}
+
+.zoom-slider {
+    width: 80px;
+    height: 4px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: var(--border);
+    outline: none;
+    border-radius: 2px;
+}
+
+.zoom-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    background: var(--accent);
+    cursor: pointer;
+    border-radius: 50%;
+}
+
+.zoom-slider::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    background: var(--accent);
+    cursor: pointer;
+    border-radius: 50%;
+    border: none;
+}
+
+.timeline-ruler {
+    flex: 1;
+    position: relative;
+    cursor: pointer;
+    background-color: #252525;
+}
+
+.timeline-tracks {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden; /* Scroll handled by container logic usually, but here we keep simple */
+    position: relative;
+    display: flex;
+    flex-direction: column;
+}
+
+.track {
+    height: 60px;
+    border-bottom: 1px solid var(--border);
+    position: relative;
+    background-color: var(--bg-track);
+    width: 100%;
+}
+
+.clip {
+    position: absolute;
+    height: 100%;
+    border-radius: 4px;
+    overflow: visible;
+    cursor: grab;
+    border: 1px solid rgba(255,255,255,0.2);
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.clip-content {
+    height: 100%;
+    padding: 5px;
+    font-size: 12px;
+    color: white;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    overflow: hidden;
+    pointer-events: auto;
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+}
+
+.clip.selected {
+    border: 2px solid #ffeb3b;
+    box-shadow: 0 0 10px rgba(255, 235, 59, 0.5);
+}
+
+.trim-handle {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 8px;
+    background-color: rgba(255, 255, 255, 0.3);
+    cursor: ew-resize;
+    z-index: 5;
+    transition: background-color 0.2s;
+}
+
+.trim-handle:hover {
+    background-color: rgba(255, 255, 255, 0.6);
+}
+
+.trim-handle-start {
+    left: 0;
+    border-radius: 4px 0 0 4px;
+}
+
+.trim-handle-end {
+    right: 0;
+    border-radius: 0 4px 4px 0;
+}
+
+.clip.video {
+    background-color: var(--track-video);
+}
+
+.clip.audio {
+    background-color: var(--track-audio);
+}
+
+.waveform-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    opacity: 0.8;
+}
+
+.clip-thumbnail {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 80px;
+    height: 100%;
+    pointer-events: none;
+    border-right: 1px solid rgba(255, 255, 255, 0.2);
+    object-fit: cover;
+}
+
+.playhead {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background-color: var(--playhead);
+    z-index: 10;
+    pointer-events: auto;
+    cursor: ew-resize;
+    transform: translateX(0);
+}
+
+.playhead::before {
+    content: '';
+    position: absolute;
+    top: -10px;
+    left: -5px;
+    width: 10px;
+    height: 10px;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 10px solid var(--playhead);
+    cursor: ew-resize;
+}
+
+.gain-line {
+    position: absolute;
+    left: 0;
+    width: 100%;
+    height: 2px;
+    background-color: rgba(255, 255, 255, 0.8);
+    cursor: ns-resize;
+    z-index: 10;
+    pointer-events: auto;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.5);
+}
+
+.gain-line:hover {
+    background-color: #fff;
+    height: 3px;
+}
+
+.gain-line::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 6px;
+    height: 6px;
+    background-color: #fff;
+    border-radius: 50%;
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+
+.gain-line:hover::after {
+    opacity: 1;
+}
+
+.clip.audio .clip-content {
+    pointer-events: none; /* Let clicks pass through to gain line if needed, but we handle z-index */
+}

@@ -1,0 +1,7 @@
+node_modules/
+package-lock.json
+# Keep ffmpeg-core files for static hosting
+!ffmpeg-core.js
+!ffmpeg-core.wasm
+!public/ffmpeg-core.js
+!public/ffmpeg-core.wasm
