@@ -74,7 +74,7 @@ export class PreviewPlayer {
         this.audioPool.forEach(a => a.pause());
     }
 
-    loop() {
+    async loop() {
         if (!this.isPlaying) return;
 
         const now = performance.now();
@@ -87,7 +87,7 @@ export class PreviewPlayer {
         const x = this.app.timelineManager.currentTime * this.app.timelineManager.zoom;
         this.app.timelineManager.playhead.style.transform = `translateX(${x}px)`;
 
-        this.render(this.app.timelineManager.currentTime);
+        await this.render(this.app.timelineManager.currentTime);
         this.updateTimeDisplay(this.app.timelineManager.currentTime);
 
         // Get actual timeline duration based on clips
@@ -97,7 +97,7 @@ export class PreviewPlayer {
             this.togglePlay();
             this.app.timelineManager.currentTime = 0;
             this.seek(0);
-        } else {
+        } else if (this.isPlaying) {
             this.animationFrame = requestAnimationFrame(() => this.loop());
         }
     }
@@ -122,7 +122,10 @@ export class PreviewPlayer {
             if (a.trackId === 'v1' && b.trackId === 'v2') return -1;
             if (a.trackId === 'v2' && b.trackId === 'v1') return 1;
             // If same track, sort by start time (older clip first)
-            return a.startTime - b.startTime;
+            if (Math.abs(a.startTime - b.startTime) > 0.001) {
+                return a.startTime - b.startTime;
+            }
+            return a.id.localeCompare(b.id);
         });
 
         // Clear canvas first with opaque black background
@@ -236,7 +239,10 @@ export class PreviewPlayer {
                 const videoTime = clipLocalTime + (clip.trimStart || 0);
                 
                 // Seek if needed
-                if (shouldSeek && Math.abs(videoEl.currentTime - videoTime) > 0.1) {
+                // Relax threshold if playing to avoid micro-stutters
+                const seekThreshold = this.isPlaying ? 0.25 : 0.1;
+
+                if (shouldSeek && Math.abs(videoEl.currentTime - videoTime) > seekThreshold) {
                     videoEl.currentTime = videoTime;
                     
                     // Wait for seek to complete and frame to be ready
@@ -371,6 +377,7 @@ export class PreviewPlayer {
         const scale = clip.imageScale || 1.0;
         const x = clip.imageX || 0;
         const y = clip.imageY || 0;
+        const rotation = clip.imageRotation || 0;
 
         // Calculate scaled dimensions
         const scaledWidth = img.naturalWidth * scale;
@@ -382,9 +389,22 @@ export class PreviewPlayer {
         // Use source-over to properly blend transparent pixels
         this.ctx.globalCompositeOperation = 'source-over';
 
-        // Draw image at specified position and scale
-        // The canvas will automatically handle alpha transparency
-        this.ctx.drawImage(img, x, y, scaledWidth, scaledHeight);
+        // Save context for rotation
+        this.ctx.save();
+
+        // Calculate center for rotation
+        const centerX = x + scaledWidth / 2;
+        const centerY = y + scaledHeight / 2;
+
+        // Translate to center, rotate, then translate back
+        this.ctx.translate(centerX, centerY);
+        this.ctx.rotate(rotation * Math.PI / 180);
+        
+        // Draw image centered at (0,0)
+        this.ctx.drawImage(img, -scaledWidth / 2, -scaledHeight / 2, scaledWidth, scaledHeight);
+
+        // Restore context (undo rotation/translation)
+        this.ctx.restore();
         
         // Restore composite operation
         this.ctx.globalCompositeOperation = prevComposite;

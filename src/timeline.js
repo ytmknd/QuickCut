@@ -306,6 +306,7 @@ export class TimelineManager {
             imageX: 0,
             imageY: 0,
             imageScale: 1.0,
+            imageRotation: 0,
             // Audio properties
             gain: 0 // dB
         };
@@ -750,6 +751,10 @@ export class TimelineManager {
                     <label class="property-label">Scale</label>
                     <input type="number" id="prop-scale" class="property-input" value="${clip.imageScale || 1}" step="0.1" min="0.1" max="5">
                 </div>
+                <div class="property-group">
+                    <label class="property-label">Rotation (deg)</label>
+                    <input type="number" id="prop-rotation" class="property-input" value="${clip.imageRotation || 0}" step="1" min="0" max="360">
+                </div>
             `;
         }
 
@@ -788,6 +793,14 @@ export class TimelineManager {
             if (propScale) {
                 propScale.addEventListener('input', (e) => {
                     clip.imageScale = parseFloat(e.target.value) || 1;
+                    this.app.previewPlayer.render(this.currentTime);
+                });
+            }
+
+            const propRotation = document.getElementById('prop-rotation');
+            if (propRotation) {
+                propRotation.addEventListener('input', (e) => {
+                    clip.imageRotation = parseFloat(e.target.value) || 0;
                     this.app.previewPlayer.render(this.currentTime);
                 });
             }

@@ -344,11 +344,56 @@ export class Exporter {
 
                 if (asset.type === 'image') {
                     const imgScale = clip.imageScale || 1.0;
+                    const rotation = clip.imageRotation || 0;
                     overlayX = clip.imageX || 0;
                     overlayY = clip.imageY || 0;
 
                     // Ensure dimensions are even for libx264
-                    clipFilterChain = `${inputStream}loop=loop=-1:size=1:start=0,scale=trunc(iw*${imgScale}/2)*2:trunc(ih*${imgScale}/2)*2,trim=duration=${clip.duration},setpts=PTS-STARTPTS+${clip.startTime}/TB`;
+                    clipFilterChain = `${inputStream}loop=loop=-1:size=1:start=0,scale=trunc(iw*${imgScale}/2)*2:trunc(ih*${imgScale}/2)*2`;
+
+                    if (rotation !== 0) {
+                        const rad = (rotation * Math.PI / 180).toFixed(4);
+                        clipFilterChain += `,rotate=${rad}:ow=rotw(${rad}):oh=roth(${rad}):c=none`;
+                        
+                        // Adjust overlay position to keep center fixed
+                        let width = 0;
+                        let height = 0;
+                        
+                        if (asset.imageElement && asset.imageElement.naturalWidth) {
+                            width = asset.imageElement.naturalWidth;
+                            height = asset.imageElement.naturalHeight;
+                        } else {
+                            // Load image to get dimensions
+                            await new Promise((resolve) => {
+                                const img = new Image();
+                                img.src = asset.url;
+                                img.onload = () => {
+                                    width = img.naturalWidth;
+                                    height = img.naturalHeight;
+                                    asset.imageElement = img; // Cache it
+                                    resolve();
+                                };
+                                img.onerror = () => {
+                                    console.error('Failed to load image for dimensions');
+                                    resolve();
+                                };
+                            });
+                        }
+                        
+                        if (width > 0 && height > 0) {
+                            const scaledW = (Math.floor((width * imgScale) / 2) * 2);
+                            const scaledH = (Math.floor((height * imgScale) / 2) * 2);
+                            
+                            const radAbs = Math.abs(rotation * Math.PI / 180);
+                            const rotW = scaledW * Math.abs(Math.cos(radAbs)) + scaledH * Math.abs(Math.sin(radAbs));
+                            const rotH = scaledW * Math.abs(Math.sin(radAbs)) + scaledH * Math.abs(Math.cos(radAbs));
+                            
+                            overlayX -= (rotW - scaledW) / 2;
+                            overlayY -= (rotH - scaledH) / 2;
+                        }
+                    }
+
+                    clipFilterChain += `,trim=duration=${clip.duration},setpts=PTS-STARTPTS+${clip.startTime}/TB`;
                 } else {
                     // Video: Scale to fit 1280x720 with black bars
                     // Since we used -ss on input, trim start is effectively 0 relative to the input stream
