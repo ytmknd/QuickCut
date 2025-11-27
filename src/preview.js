@@ -144,9 +144,10 @@ export class PreviewPlayer {
                 let opacity = 1.0;
                 
                 // 1. Check for overlap with NEXT clips (Fade Out)
-                // Find clips that start while this clip is playing
+                // Find clips that start while this clip is playing (SAME TRACK ONLY)
                 const nextClips = allVideoClips.filter(c => 
                     c.id !== clip.id &&
+                    c.trackId === clip.trackId &&
                     c.startTime > clip.startTime &&
                     c.startTime < (clip.startTime + clip.duration)
                 );
@@ -156,12 +157,12 @@ export class PreviewPlayer {
                     const overlapEnd = Math.min(clip.startTime + clip.duration, nextClip.startTime + nextClip.duration);
                     const overlapDuration = overlapEnd - overlapStart;
                     
-                    // Fade out in the first half of overlap
-                    const fadeOutEnd = overlapStart + (overlapDuration / 2);
+                    // Fade out over the ENTIRE overlap duration
+                    const fadeOutEnd = overlapStart + overlapDuration;
                     
                     if (time >= overlapStart && time <= fadeOutEnd) {
                         // 1.0 -> 0.0
-                        const progress = (time - overlapStart) / (overlapDuration / 2);
+                        const progress = (time - overlapStart) / overlapDuration;
                         opacity = Math.min(opacity, 1.0 - progress);
                     } else if (time > fadeOutEnd && time < overlapEnd) {
                         opacity = 0.0;
@@ -169,9 +170,10 @@ export class PreviewPlayer {
                 }
                 
                 // 2. Check for overlap with PREVIOUS clips (Fade In)
-                // Find clips that started before this clip and are still playing
+                // Find clips that started before this clip and are still playing (SAME TRACK ONLY)
                 const prevClips = allVideoClips.filter(c => 
                     c.id !== clip.id &&
+                    c.trackId === clip.trackId &&
                     c.startTime < clip.startTime &&
                     (c.startTime + c.duration) > clip.startTime
                 );
@@ -181,12 +183,12 @@ export class PreviewPlayer {
                     const overlapEnd = Math.min(prevClip.startTime + prevClip.duration, clip.startTime + clip.duration);
                     const overlapDuration = overlapEnd - overlapStart;
                     
-                    // Fade in in the second half of overlap
-                    const fadeInStart = overlapStart + (overlapDuration / 2);
+                    // Fade in over the ENTIRE overlap duration
+                    const fadeInStart = overlapStart;
                     
                     if (time >= fadeInStart && time <= overlapEnd) {
                         // 0.0 -> 1.0
-                        const progress = (time - fadeInStart) / (overlapDuration / 2);
+                        const progress = (time - fadeInStart) / overlapDuration;
                         opacity = Math.min(opacity, progress);
                     } else if (time >= overlapStart && time < fadeInStart) {
                         opacity = 0.0;

@@ -363,9 +363,10 @@ export class Exporter {
                 // Apply Fade Effects
                 let fadeFilters = [];
                 
-                // 1. Fade Out (overlap with next clips)
+                // 1. Fade Out (overlap with next clips on the SAME track)
                 const nextClips = sortedClips.filter(c => 
                     c.id !== clip.id &&
+                    c.trackId === clip.trackId &&
                     c.startTime > clip.startTime &&
                     c.startTime < (clip.startTime + clip.duration) &&
                     (c.type === 'video' || c.type === 'image')
@@ -375,7 +376,9 @@ export class Exporter {
                     const overlapStart = nextClip.startTime;
                     const overlapEnd = Math.min(clip.startTime + clip.duration, nextClip.startTime + nextClip.duration);
                     const overlapDuration = overlapEnd - overlapStart;
-                    const fadeOutDuration = overlapDuration / 2;
+                    
+                    // Fade out over the ENTIRE overlap duration to avoid dip to black
+                    const fadeOutDuration = overlapDuration;
                     
                     if (fadeOutDuration > 0) {
                         // fade=t=out:st=START:d=DURATION:alpha=1
@@ -383,9 +386,10 @@ export class Exporter {
                     }
                 }
                 
-                // 2. Fade In (overlap with previous clips)
+                // 2. Fade In (overlap with previous clips on the SAME track)
                 const prevClips = sortedClips.filter(c => 
                     c.id !== clip.id &&
+                    c.trackId === clip.trackId &&
                     c.startTime < clip.startTime &&
                     (c.startTime + c.duration) > clip.startTime &&
                     (c.type === 'video' || c.type === 'image')
@@ -395,8 +399,10 @@ export class Exporter {
                     const overlapStart = clip.startTime;
                     const overlapEnd = Math.min(prevClip.startTime + prevClip.duration, clip.startTime + clip.duration);
                     const overlapDuration = overlapEnd - overlapStart;
-                    const fadeInStart = overlapStart + (overlapDuration / 2);
-                    const fadeInDuration = overlapDuration / 2;
+                    
+                    // Fade in over the ENTIRE overlap duration to avoid dip to black
+                    const fadeInStart = overlapStart;
+                    const fadeInDuration = overlapDuration;
                     
                     if (fadeInDuration > 0) {
                         // fade=t=in:st=START:d=DURATION:alpha=1
