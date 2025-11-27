@@ -117,11 +117,12 @@ export class PreviewPlayer {
             time >= clip.startTime && time < clip.startTime + clip.duration
         );
 
-        // Sort by track (v1 first, then v2 on top)
+        // Sort by track (v1 first, then v2 on top) and then by start time
         clips.sort((a, b) => {
             if (a.trackId === 'v1' && b.trackId === 'v2') return -1;
             if (a.trackId === 'v2' && b.trackId === 'v1') return 1;
-            return 0;
+            // If same track, sort by start time (older clip first)
+            return a.startTime - b.startTime;
         });
 
         // Clear canvas first with opaque black background
@@ -161,11 +162,10 @@ export class PreviewPlayer {
                     const fadeOutEnd = overlapStart + overlapDuration;
                     
                     if (time >= overlapStart && time <= fadeOutEnd) {
-                        // 1.0 -> 0.0
-                        const progress = (time - overlapStart) / overlapDuration;
-                        opacity = Math.min(opacity, 1.0 - progress);
-                    } else if (time > fadeOutEnd && time < overlapEnd) {
-                        opacity = 0.0;
+                        // For preview stability, we DO NOT fade out the bottom clip.
+                        // This prevents the "dip to black" issue when using simple alpha blending.
+                        // The top clip will fade in over this opaque clip.
+                        opacity = 1.0;
                     }
                 }
                 
