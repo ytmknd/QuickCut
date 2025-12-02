@@ -1,3 +1,5 @@
+import { HistoryManager } from './history.js';
+
 export class TimelineManager {
     constructor(app) {
         this.app = app;
@@ -20,8 +22,8 @@ export class TimelineManager {
         this.isDraggingPlayhead = false;
         this.draggedClip = null;
         this.dragOffsetX = 0; // Offset from clip start to mouse position
-        this.selectedClip = null;
-        this.clipboardClip = null; // Copied clip data
+        this.selectedClips = [];
+        this.clipboardClips = []; // Copied clips data
         this.snapEnabled = true; // Enable snap by default
         this.snapThreshold = 0.5; // Snap threshold in seconds (adjusts with zoom)
         this.isTrimmingClip = false;
@@ -31,11 +33,15 @@ export class TimelineManager {
         this.trimOriginalStart = 0;
         this.trimOriginalDuration = 0;
         this.trimOriginalTrimStart = 0;
-        
+
         this.isInteractive = true; // Flag to control timeline interactivity
 
         this.isDraggingGain = false;
         this.draggedGainClip = null;
+
+
+
+        this.historyManager = new HistoryManager(this);
 
         this.initListeners();
         this.renderRuler();
@@ -77,7 +83,7 @@ export class TimelineManager {
         // Keyboard shortcuts
         document.addEventListener('keydown', (e) => {
             if (e.target.matches('input, textarea')) return;
-            
+
             if (e.key === '+' || e.key === '=') {
                 this.zoomIn();
             } else if (e.key === '-' || e.key === '_') {
@@ -139,7 +145,7 @@ export class TimelineManager {
                 if (!this.isInteractive) return;
                 const clipEl = e.target.classList.contains('clip') ? e.target : e.target.closest('.clip');
                 const clipId = clipEl.dataset.id;
-                
+
                 // Find the clip
                 let clickedClip = null;
                 for (const trackId in this.tracks) {
@@ -149,18 +155,19 @@ export class TimelineManager {
                         break;
                     }
                 }
-                
+
                 if (clickedClip) {
                     // If clicking on already selected clip, allow dragging
-                    if (this.selectedClip && this.selectedClip.id === clickedClip.id) {
+                    const isSelected = this.selectedClips.some(c => c.id === clickedClip.id);
+                    if (isSelected && !e.shiftKey) {
                         // Only start drag if clicking on clip content, not handles
                         if (e.target.classList.contains('clip-content') || e.target.classList.contains('clip')) {
                             e.stopPropagation();
                             this.startClipDrag(e);
                         }
                     } else {
-                        // Select the clip (no drag on first click)
-                        this.selectClip(clickedClip);
+                        // Select the clip (no drag on first click if not selected)
+                        this.selectClip(clickedClip, e.shiftKey);
                     }
                 }
             } else {
@@ -199,7 +206,7 @@ export class TimelineManager {
             if (this.isDraggingPlayhead) {
                 this.app.previewPlayer.seek(this.currentTime);
             }
-            
+
             this.isScrubbing = false;
             this.isDraggingClip = false;
             this.isDraggingPlayhead = false;
@@ -215,15 +222,15 @@ export class TimelineManager {
     }
 
     startClipDrag(e) {
+        this.historyManager.pushState();
         this.isDraggingClip = true;
         const clipEl = e.target.classList.contains('clip') ? e.target : e.target.closest('.clip');
         const clipId = clipEl.dataset.id;
-        
+
         // Calculate the offset from the clip's left edge to the mouse position
         const clipRect = clipEl.getBoundingClientRect();
-        const tracksRect = this.tracksContainer.getBoundingClientRect();
         this.dragOffsetX = e.clientX - clipRect.left;
-        
+
         // Find clip object
         for (const trackId in this.tracks) {
             const clip = this.tracks[trackId].find(c => c.id === clipId);
@@ -232,73 +239,158 @@ export class TimelineManager {
                 break;
             }
         }
+
+        if (this.draggedClip) {
+            this.dragStartX = e.clientX;
+
+            // Capture state of ALL selected clips
+            this.draggedClipsState = this.selectedClips.map(clip => ({
+                clip: clip,
+                originalStartTime: clip.startTime,
+                originalTrackId: clip.trackId,
+                originalTrimStart: clip.trimStart || 0
+            }));
+
+            this.slideState = null; // Reset slide state
+        }
     }
 
     handleClipDrag(e) {
-        if (!this.draggedClip) return;
+        if (!this.draggedClip || !this.draggedClipsState) return;
 
-        // Calculate new position based on mouse position minus the offset
+        // Normal Drag Logic
         const tracksRect = this.tracksContainer.getBoundingClientRect();
         const mouseXInTracks = e.clientX - tracksRect.left + this.tracksContainer.scrollLeft;
-        const clipLeftX = mouseXInTracks - this.dragOffsetX;
-        
-        let newStartTime = clipLeftX / this.zoom;
-        newStartTime = Math.max(0, newStartTime); // Prevent negative time
 
-        // Apply snap if enabled
+        // Calculate raw delta time based on mouse movement for the PRIMARY clip
+        const clipLeftX = mouseXInTracks - this.dragOffsetX;
+        let primaryNewStartTime = clipLeftX / this.zoom;
+        primaryNewStartTime = Math.max(0, primaryNewStartTime);
+
         if (this.snapEnabled) {
-            newStartTime = this.getSnappedTime(newStartTime, this.draggedClip);
+            primaryNewStartTime = this.getSnappedTime(primaryNewStartTime, this.draggedClip);
         }
 
-        this.draggedClip.startTime = newStartTime;
+        // Calculate delta from original position
+        const primaryState = this.draggedClipsState.find(s => s.clip.id === this.draggedClip.id);
+        if (!primaryState) return;
 
-        // Handle Track Change
-        // We need to find the track element under the cursor
-        // Since the mouse might be over the clip itself (which captures events), we might need to hide it momentarily or use logic based on Y position.
-        // A simpler approach for MVP: Use elementsFromPoint and look for track.
+        const deltaTime = primaryNewStartTime - primaryState.originalStartTime;
 
+        // Determine target track for PRIMARY clip
+        let primaryTargetTrackId = this.draggedClip.trackId;
         const elements = document.elementsFromPoint(e.clientX, e.clientY);
         const trackEl = elements.find(el => el.classList.contains('track'));
 
         if (trackEl) {
             const newTrackId = trackEl.dataset.id;
-            if (newTrackId !== this.draggedClip.trackId) {
-                // Check if type matches (video to video, audio to audio)
-                const newTrackType = trackEl.dataset.type;
-                if (newTrackType === this.draggedClip.type) {
-                    // Remove from old track
-                    const oldTrackList = this.tracks[this.draggedClip.trackId];
-                    const clipIndex = oldTrackList.indexOf(this.draggedClip);
-                    if (clipIndex > -1) {
-                        oldTrackList.splice(clipIndex, 1);
-                    }
-
-                    // Add to new track
-                    this.draggedClip.trackId = newTrackId;
-                    this.tracks[newTrackId].push(this.draggedClip);
-
-                    // Move DOM element
-                    const el = document.querySelector(`.clip[data-id="${this.draggedClip.id}"]`);
-                    if (el) {
-                        trackEl.appendChild(el);
-                    }
-                }
+            const newTrackType = trackEl.dataset.type;
+            if (newTrackType === this.draggedClip.type) {
+                primaryTargetTrackId = newTrackId;
             }
         }
 
-        // Update DOM Position
-        const el = document.querySelector(`.clip[data-id="${this.draggedClip.id}"]`);
-        if (el) {
-            el.style.left = `${newStartTime * this.zoom}px`;
+        // Calculate Track Index Delta
+        const trackOrder = ['v1', 'v2', 'a1', 'a2'];
+        const primaryOriginalTrackIndex = trackOrder.indexOf(primaryState.originalTrackId);
+        const primaryTargetTrackIndex = trackOrder.indexOf(primaryTargetTrackId);
+        const trackIndexDelta = primaryTargetTrackIndex - primaryOriginalTrackIndex;
+
+        // Check validity of the move for ALL clips
+        let canMoveTracks = true;
+
+        // First pass: Calculate proposed states
+        const proposedMoves = this.draggedClipsState.map(state => {
+            let newStartTime = state.originalStartTime + deltaTime;
+            newStartTime = Math.max(0, newStartTime);
+
+            let newTrackId = state.originalTrackId;
+            if (trackIndexDelta !== 0) {
+                const currentTrackIndex = trackOrder.indexOf(state.originalTrackId);
+                const targetTrackIndex = currentTrackIndex + trackIndexDelta;
+                if (targetTrackIndex >= 0 && targetTrackIndex < trackOrder.length) {
+                    const targetTrackId = trackOrder[targetTrackIndex];
+                    // Check type compatibility (video->video, audio->audio)
+                    const isVideo = state.clip.type === 'video';
+                    const isTargetVideo = targetTrackId.startsWith('v');
+                    if ((isVideo && isTargetVideo) || (!isVideo && !isTargetVideo)) {
+                        newTrackId = targetTrackId;
+                    } else {
+                        canMoveTracks = false;
+                    }
+                } else {
+                    canMoveTracks = false;
+                }
+            }
+
+            return {
+                clip: state.clip,
+                newStartTime,
+                newTrackId,
+                duration: state.clip.duration,
+                id: state.clip.id
+            };
+        });
+
+        // If track move is invalid for any, reset all track moves
+        if (!canMoveTracks) {
+            proposedMoves.forEach(m => m.newTrackId = this.draggedClipsState.find(s => s.clip.id === m.clip.id).originalTrackId);
         }
+
+        // Check collisions for ALL proposed moves
+        const selectedIds = this.selectedClips.map(c => c.id);
+        for (const move of proposedMoves) {
+            if (this.checkOverlap(move.newTrackId, move.newStartTime, move.duration, selectedIds)) {
+                return; // Abort move if any collision
+            }
+        }
+
+        // Apply updates
+        proposedMoves.forEach(move => {
+            const clip = move.clip;
+
+            // Handle Track Change
+            if (move.newTrackId !== clip.trackId) {
+                // Remove from old
+                const oldTrackList = this.tracks[clip.trackId];
+                const idx = oldTrackList.indexOf(clip);
+                if (idx > -1) oldTrackList.splice(idx, 1);
+
+                // Add to new
+                clip.trackId = move.newTrackId;
+                this.tracks[move.newTrackId].push(clip);
+
+                // Move DOM
+                const el = document.querySelector(`.clip[data-id="${clip.id}"]`);
+                const newTrackEl = document.querySelector(`.track[data-id="${move.newTrackId}"]`);
+                if (el && newTrackEl) newTrackEl.appendChild(el);
+            }
+
+            // Update Time
+            clip.startTime = move.newStartTime;
+            const el = document.querySelector(`.clip[data-id="${clip.id}"]`);
+            if (el) el.style.left = `${clip.startTime * this.zoom}px`;
+        });
     }
+
+
+
     addClip(trackId, asset, startTime) {
+        this.historyManager.pushState();
+        const duration = asset.duration || 5; // Use asset duration or default 5s
+
+        // Check for triple overlap
+        if (this.checkOverlap(trackId, startTime, duration, [])) {
+            alert('Cannot place clip here: Maximum overlap of 2 clips reached.');
+            return;
+        }
+
         // Simple collision check could go here
         const clip = {
             id: Date.now() + Math.random().toString(36).substr(2, 9),
             assetId: asset.id,
             startTime: startTime,
-            duration: asset.duration || 5, // Use asset duration or default 5s
+            duration: duration,
             trackId: trackId,
             type: asset.type === 'image' ? 'video' : asset.type, // Treat images as video clips
             isImage: asset.type === 'image',
@@ -316,7 +408,7 @@ export class TimelineManager {
 
         this.tracks[trackId].push(clip);
         this.renderClip(clip);
-        
+
         // Update timeline duration
         this.updateTimelineDuration();
     }
@@ -344,7 +436,7 @@ export class TimelineManager {
             thumbnail.width = 80;
             thumbnail.height = 60;
             el.appendChild(thumbnail);
-            
+
             // Generate thumbnail
             this.generateThumbnail(thumbnail, clip);
         }
@@ -356,7 +448,7 @@ export class TimelineManager {
             waveformCanvas.width = clip.duration * this.zoom;
             waveformCanvas.height = 60; // Track height
             el.appendChild(waveformCanvas);
-            
+
             // Draw waveform
             this.drawWaveform(waveformCanvas, clip);
         }
@@ -368,13 +460,13 @@ export class TimelineManager {
             // Calculate top position based on gain
             const y = this.getNormalizedYFromDB(clip.gain || 0);
             gainLine.style.top = `${(1 - y) * 100}%`;
-            
+
             // Add drag handle behavior
             gainLine.addEventListener('mousedown', (e) => {
                 e.stopPropagation(); // Prevent clip drag
                 this.startGainDrag(e, clip);
             });
-            
+
             el.appendChild(gainLine);
         }
 
@@ -474,7 +566,7 @@ export class TimelineManager {
         // Calculate the end time of the last clip
         let maxEndTime = 60; // Default minimum duration
         const allClips = this.getAllClips();
-        
+
         if (allClips.length > 0) {
             allClips.forEach(clip => {
                 const clipEndTime = clip.startTime + clip.duration;
@@ -483,25 +575,35 @@ export class TimelineManager {
                 }
             });
         }
-        
+
         return maxEndTime;
     }
 
     cutClipAtPlayhead() {
+        this.historyManager.pushState();
         const currentTime = this.currentTime;
-        
-        // If a clip is selected, only cut that clip
-        if (this.selectedClip) {
-            const clip = this.selectedClip;
-            const clipStartTime = clip.startTime;
-            const clipEndTime = clip.startTime + clip.duration;
 
-            // Check if playhead is within this clip (not at the edges)
-            if (currentTime > clipStartTime && currentTime < clipEndTime) {
-                this.performCut(clip, currentTime);
-                console.log('Selected clip cut at', currentTime, 'seconds');
+        // If clips are selected, cut them
+        if (this.selectedClips.length > 0) {
+            // Create a copy of the array to avoid issues while modifying the selection during iteration
+            const clipsToCut = [...this.selectedClips];
+            let cutCount = 0;
+
+            clipsToCut.forEach(clip => {
+                const clipStartTime = clip.startTime;
+                const clipEndTime = clip.startTime + clip.duration;
+
+                // Check if playhead is within this clip (not at the edges)
+                if (currentTime > clipStartTime && currentTime < clipEndTime) {
+                    this.performCut(clip, currentTime);
+                    cutCount++;
+                }
+            });
+
+            if (cutCount > 0) {
+                console.log(`${cutCount} selected clips cut at ${currentTime} seconds`);
             } else {
-                console.log('Playhead is not within the selected clip');
+                console.log('Playhead is not within any selected clip');
             }
             return;
         }
@@ -510,7 +612,7 @@ export class TimelineManager {
         let clipWasCut = false;
         for (const trackId in this.tracks) {
             const trackClips = this.tracks[trackId];
-            
+
             for (let i = 0; i < trackClips.length; i++) {
                 const clip = trackClips[i];
                 const clipStartTime = clip.startTime;
@@ -535,7 +637,7 @@ export class TimelineManager {
     performCut(clip, cutTime) {
         const trackClips = this.tracks[clip.trackId];
         const clipIndex = trackClips.indexOf(clip);
-        
+
         const clipStartTime = clip.startTime;
         const clipEndTime = clip.startTime + clip.duration;
         const firstClipDuration = cutTime - clipStartTime;
@@ -574,73 +676,85 @@ export class TimelineManager {
         this.selectClip(clip);
     }
 
-    selectClip(clip) {
-        // Deselect previous clip
-        if (this.selectedClip) {
-            const prevEl = document.querySelector(`.clip[data-id="${this.selectedClip.id}"]`);
-            if (prevEl) {
-                prevEl.classList.remove('selected');
+    selectClip(clip, shiftKey = false) {
+        if (shiftKey) {
+            // Toggle selection
+            const index = this.selectedClips.findIndex(c => c.id === clip.id);
+            if (index > -1) {
+                // Deselect
+                this.selectedClips.splice(index, 1);
+                const el = document.querySelector(`.clip[data-id="${clip.id}"]`);
+                if (el) el.classList.remove('selected');
+            } else {
+                // Select
+                this.selectedClips.push(clip);
+                const el = document.querySelector(`.clip[data-id="${clip.id}"]`);
+                if (el) el.classList.add('selected');
             }
+        } else {
+            // Single selection
+            this.deselectClip();
+            this.selectedClips = [clip];
+            const el = document.querySelector(`.clip[data-id="${clip.id}"]`);
+            if (el) el.classList.add('selected');
         }
 
-        // Select new clip
-        this.selectedClip = clip;
-        const el = document.querySelector(`.clip[data-id="${clip.id}"]`);
-        if (el) {
-            el.classList.add('selected');
-        }
-
-        // Update properties panel
+        // Update properties panel (show info for the last selected clip)
         this.updatePropertiesPanel();
 
-        console.log('Clip selected:', clip.id);
+        console.log('Selected clips:', this.selectedClips.map(c => c.id));
     }
 
     deselectClip() {
-        if (this.selectedClip) {
-            const el = document.querySelector(`.clip[data-id="${this.selectedClip.id}"]`);
+        this.selectedClips.forEach(clip => {
+            const el = document.querySelector(`.clip[data-id="${clip.id}"]`);
             if (el) {
                 el.classList.remove('selected');
             }
-            this.selectedClip = null;
-        }
-        
+        });
+        this.selectedClips = [];
+
         // Clear properties panel
         this.updatePropertiesPanel();
     }
 
     deleteSelectedClip() {
-        if (!this.selectedClip) {
-            console.log('No clip selected to delete');
+        if (this.selectedClips.length === 0) {
+            console.log('No clips selected to delete');
             return;
         }
+        this.historyManager.pushState();
 
-        const clip = this.selectedClip;
-        const trackClips = this.tracks[clip.trackId];
-        
-        // Find and remove clip from track
-        const index = trackClips.indexOf(clip);
-        if (index > -1) {
-            trackClips.splice(index, 1);
-        }
+        // Create a copy to iterate safely
+        const clipsToDelete = [...this.selectedClips];
 
-        // Remove DOM element
-        const el = document.querySelector(`.clip[data-id="${clip.id}"]`);
-        if (el) {
-            el.remove();
-        }
+        clipsToDelete.forEach(clip => {
+            const trackClips = this.tracks[clip.trackId];
 
-        // Remove associated video element from pool
-        const videoElIndex = this.app.previewPlayer.videoPool.findIndex(v => v.dataset.clipId === clip.id);
-        if (videoElIndex > -1) {
-            const videoEl = this.app.previewPlayer.videoPool[videoElIndex];
-            videoEl.pause();
-            videoEl.src = '';
-            this.app.previewPlayer.videoPool.splice(videoElIndex, 1);
-        }
+            // Find and remove clip from track
+            const index = trackClips.indexOf(clip);
+            if (index > -1) {
+                trackClips.splice(index, 1);
+            }
 
-        console.log('Clip deleted:', clip.id);
-        this.selectedClip = null;
+            // Remove DOM element
+            const el = document.querySelector(`.clip[data-id="${clip.id}"]`);
+            if (el) {
+                el.remove();
+            }
+
+            // Remove associated video element from pool
+            const videoElIndex = this.app.previewPlayer.videoPool.findIndex(v => v.dataset.clipId === clip.id);
+            if (videoElIndex > -1) {
+                const videoEl = this.app.previewPlayer.videoPool[videoElIndex];
+                videoEl.pause();
+                videoEl.src = '';
+                this.app.previewPlayer.videoPool.splice(videoElIndex, 1);
+            }
+        });
+
+        console.log('Clips deleted:', clipsToDelete.map(c => c.id));
+        this.selectedClips = [];
 
         // Update timeline duration
         this.updateTimelineDuration();
@@ -650,53 +764,75 @@ export class TimelineManager {
     }
 
     copySelectedClip() {
-        if (!this.selectedClip) {
+        if (this.selectedClips.length === 0) {
             console.log('No clip selected to copy');
             return;
         }
 
-        // Create a copy of the clip data (not the DOM element)
-        this.clipboardClip = {
-            assetId: this.selectedClip.assetId,
-            duration: this.selectedClip.duration,
-            trackId: this.selectedClip.trackId,
-            type: this.selectedClip.type,
-            trimStart: this.selectedClip.trimStart || 0
-        };
+        // Calculate minimum start time to use as reference
+        const minStartTime = Math.min(...this.selectedClips.map(c => c.startTime));
 
-        console.log('Clip copied:', this.clipboardClip);
+        this.clipboardClips = this.selectedClips.map(clip => ({
+            assetId: clip.assetId,
+            duration: clip.duration,
+            trackId: clip.trackId,
+            type: clip.type,
+            trimStart: clip.trimStart || 0,
+            offsetFromStart: clip.startTime - minStartTime
+        }));
+
+        console.log('Clips copied:', this.clipboardClips.length);
+    }
+
+    cutSelectedClip() {
+        if (this.selectedClips.length === 0) {
+            console.log('No clip selected to cut');
+            return;
+        }
+        this.copySelectedClip();
+        this.deleteSelectedClip();
+        console.log('Clips cut');
     }
 
     pasteClip() {
-        if (!this.clipboardClip) {
-            console.log('No clip in clipboard to paste');
+        if (this.clipboardClips.length === 0) {
+            console.log('No clips in clipboard to paste');
             return;
         }
+        this.historyManager.pushState();
 
-        // Create a new clip at the playhead position on the same track
-        const newClip = {
-            id: Date.now() + Math.random().toString(36).substr(2, 9),
-            assetId: this.clipboardClip.assetId,
-            startTime: this.currentTime,
-            duration: this.clipboardClip.duration,
-            trackId: this.clipboardClip.trackId,
-            type: this.clipboardClip.type,
-            trimStart: this.clipboardClip.trimStart
-        };
+        const newClips = [];
 
-        this.tracks[newClip.trackId].push(newClip);
-        this.renderClip(newClip);
-        
-        // Select the newly pasted clip
-        this.selectClip(newClip);
-        
+        this.clipboardClips.forEach(clipboardClip => {
+            // Create a new clip at the playhead position + offset
+            const newStartTime = this.currentTime + clipboardClip.offsetFromStart;
+
+            const newClip = {
+                id: Date.now() + Math.random().toString(36).substr(2, 9),
+                assetId: clipboardClip.assetId,
+                startTime: newStartTime,
+                duration: clipboardClip.duration,
+                trackId: clipboardClip.trackId,
+                type: clipboardClip.type,
+                trimStart: clipboardClip.trimStart
+            };
+
+            this.tracks[newClip.trackId].push(newClip);
+            this.renderClip(newClip);
+            newClips.push(newClip);
+        });
+
+        // Select the newly pasted clips
+        this.deselectClip();
+        newClips.forEach(clip => this.selectClip(clip, true)); // true for multi-select
+
         // Update timeline duration
         this.updateTimelineDuration();
-        
+
         // Update preview
         this.app.previewPlayer.seek(this.currentTime);
-        
-        console.log('Clip pasted:', newClip.id);
+
+        console.log('Clips pasted:', newClips.length);
     }
 
     toggleSnap() {
@@ -710,6 +846,62 @@ export class TimelineManager {
             const found = this.tracks[trackId].some(clip => clip.assetId === assetId);
             if (found) return true;
         }
+        return false;
+    }
+
+    checkOverlap(trackId, startTime, duration, excludeClipIds = []) {
+        const trackClips = this.tracks[trackId];
+        if (!trackClips) return false;
+
+        // Ensure excludeClipIds is an array
+        const excludes = Array.isArray(excludeClipIds) ? excludeClipIds : [excludeClipIds];
+
+        const newStart = startTime;
+        const newEnd = startTime + duration;
+
+        // 1. Find all clips that overlap with the new range
+        const overlappingClips = trackClips.filter(clip => {
+            if (excludes.includes(clip.id)) return false;
+            const clipStart = clip.startTime;
+            const clipEnd = clip.startTime + clip.duration;
+            // Check for overlap: (StartA < EndB) and (EndA > StartB)
+            return (clipStart < newEnd && clipEnd > newStart);
+        });
+
+        // If 0 or 1 clip overlaps, it's fine (max 2 layers including new one)
+        if (overlappingClips.length < 2) return false;
+
+        // 2. Check if any two overlapping clips also overlap with each other
+        // If they do, adding a third one would create a triple overlap
+        for (let i = 0; i < overlappingClips.length; i++) {
+            for (let j = i + 1; j < overlappingClips.length; j++) {
+                const clipA = overlappingClips[i];
+                const clipB = overlappingClips[j];
+
+                const startA = clipA.startTime;
+                const endA = clipA.startTime + clipA.duration;
+                const startB = clipB.startTime;
+                const endB = clipB.startTime + clipB.duration;
+
+                // Check intersection of A and B
+                const intersectionStart = Math.max(startA, startB);
+                const intersectionEnd = Math.min(endA, endB);
+
+                if (intersectionStart < intersectionEnd) {
+                    // A and B overlap. Now check if this intersection overlaps with new range.
+                    // Since both A and B are in overlappingClips, they both overlap with new range.
+                    // We need to check if there is a common time point for A, B, and New.
+
+                    const commonStart = Math.max(intersectionStart, newStart);
+                    const commonEnd = Math.min(intersectionEnd, newEnd);
+
+                    if (commonStart < commonEnd) {
+                        return true; // Triple overlap detected
+                    }
+                }
+            }
+        }
+
         return false;
     }
 
@@ -829,7 +1021,7 @@ export class TimelineManager {
         if (el) {
             el.style.left = `${clip.startTime * this.zoom}px`;
             el.style.width = `${clip.duration * this.zoom}px`;
-            
+
             // Update waveform canvas if audio clip
             if (clip.type === 'audio') {
                 const canvas = el.querySelector('.waveform-canvas');
@@ -837,7 +1029,7 @@ export class TimelineManager {
                     canvas.width = clip.duration * this.zoom;
                     this.drawWaveform(canvas, clip);
                 }
-                
+
                 const gainLine = el.querySelector('.gain-line');
                 if (gainLine) {
                     const y = this.getNormalizedYFromDB(clip.gain || 0);
@@ -848,12 +1040,13 @@ export class TimelineManager {
     }
 
     startTrimming(e, mode) {
+        this.historyManager.pushState();
         this.isTrimmingClip = true;
         this.trimMode = mode;
-        
+
         const clipEl = e.target.closest('.clip');
         const clipId = clipEl.dataset.id;
-        
+
         // Find the clip
         for (const trackId in this.tracks) {
             const clip = this.tracks[trackId].find(c => c.id === clipId);
@@ -901,7 +1094,7 @@ export class TimelineManager {
         // Re-render
         this.renderRuler();
         this.updateAllClips();
-        
+
         // Update playhead position
         const playheadX = this.currentTime * this.zoom;
         this.playhead.style.transform = `translateX(${playheadX}px)`;
@@ -934,17 +1127,21 @@ export class TimelineManager {
         }
     }
 
+    renderAllClips() {
+        this.updateAllClips();
+    }
+
     async generateThumbnail(canvas, clip) {
         const asset = this.app.assetsManager.getAssetById(clip.assetId);
         if (!asset) return;
-        
+
         // Handle image assets
         if (clip.isImage || asset.type === 'image') {
             const ctx = canvas.getContext('2d');
             const img = new Image();
             img.crossOrigin = 'anonymous';
             img.src = asset.url;
-            
+
             try {
                 await new Promise((resolve, reject) => {
                     img.onload = resolve;
@@ -971,45 +1168,45 @@ export class TimelineManager {
             video.muted = true;
             video.preload = 'metadata';
             video.crossOrigin = 'anonymous';
-            
+
             // Wait for video to load with timeout
             await new Promise((resolve, reject) => {
                 const timeout = setTimeout(() => {
                     reject(new Error('Video load timeout'));
                 }, 5000);
-                
+
                 video.addEventListener('loadedmetadata', () => {
                     clearTimeout(timeout);
                     resolve();
                 }, { once: true });
-                
+
                 video.addEventListener('error', (e) => {
                     clearTimeout(timeout);
                     reject(e);
                 }, { once: true });
-                
+
                 video.load();
             });
-            
+
             // Seek to the trimStart position (for cut clips)
             const thumbnailTime = Math.min(clip.trimStart || 0, video.duration - 0.1);
             video.currentTime = thumbnailTime;
-            
+
             // Wait for seek to complete with timeout
             await new Promise((resolve, reject) => {
                 const timeout = setTimeout(() => {
                     resolve(); // Continue even if seek doesn't complete
                 }, 3000);
-                
+
                 video.addEventListener('seeked', () => {
                     clearTimeout(timeout);
                     resolve();
                 }, { once: true });
             });
-            
+
             // Wait a bit for frame to be ready
             await new Promise(resolve => setTimeout(resolve, 100));
-            
+
             // Draw thumbnail
             const ctx = canvas.getContext('2d');
             if (video.readyState >= 2) {
@@ -1023,7 +1220,7 @@ export class TimelineManager {
                 ctx.textAlign = 'center';
                 ctx.fillText('Video', canvas.width / 2, canvas.height / 2);
             }
-            
+
             // Clean up
             video.src = '';
             video.remove();
@@ -1043,46 +1240,46 @@ export class TimelineManager {
     getSnappedTime(targetTime, draggedClip) {
         const snapPoints = [];
         const clipEndTime = targetTime + draggedClip.duration;
-        
+
         // Add timeline start as snap point
         snapPoints.push(0);
-        
+
         // Add playhead position as snap point
         snapPoints.push(this.currentTime);
-        
+
         // Add all other clips' start and end times as snap points
         for (const trackId in this.tracks) {
             this.tracks[trackId].forEach(clip => {
                 // Skip the dragged clip itself
                 if (clip.id === draggedClip.id) return;
-                
+
                 // Add clip start and end times
                 snapPoints.push(clip.startTime);
                 snapPoints.push(clip.startTime + clip.duration);
             });
         }
-        
+
         // Check if clip start snaps to any point
         for (const snapPoint of snapPoints) {
             if (Math.abs(targetTime - snapPoint) < this.snapThreshold) {
                 return snapPoint;
             }
         }
-        
+
         // Check if clip end snaps to any point
         for (const snapPoint of snapPoints) {
             if (Math.abs(clipEndTime - snapPoint) < this.snapThreshold) {
                 return snapPoint - draggedClip.duration;
             }
         }
-        
+
         return targetTime;
     }
 
     drawWaveform(canvas, clip) {
         const ctx = canvas.getContext('2d');
         const waveformData = this.app.assetsManager.getWaveformData(clip.assetId);
-        
+
         if (!waveformData) {
             // If waveform not ready yet, try again after a short delay
             setTimeout(() => {
@@ -1093,45 +1290,45 @@ export class TimelineManager {
             }, 500);
             return;
         }
-        
+
         const asset = this.app.assetsManager.getAssetById(clip.assetId);
         if (!asset || !asset.duration) return;
-        
+
         const width = canvas.width;
         const height = canvas.height;
         const middleY = height / 2;
-        
+
         // Clear canvas
         ctx.clearRect(0, 0, width, height);
-        
+
         // Draw waveform
         ctx.fillStyle = 'rgba(61, 90, 254, 0.6)';
         ctx.strokeStyle = 'rgba(61, 90, 254, 0.9)';
         ctx.lineWidth = 1;
-        
+
         // Calculate which portion of the waveform to display
         const trimStart = clip.trimStart || 0;
         const clipDuration = clip.duration;
         const assetDuration = asset.duration;
-        
+
         // Calculate start and end indices in the waveform data array
         const startRatio = trimStart / assetDuration;
         const endRatio = (trimStart + clipDuration) / assetDuration;
         const startIndex = Math.floor(startRatio * waveformData.length);
         const endIndex = Math.ceil(endRatio * waveformData.length);
-        
+
         // Extract the visible portion of waveform
         const visibleWaveform = waveformData.slice(startIndex, endIndex);
-        
+
         if (visibleWaveform.length === 0) return;
-        
+
         const barWidth = width / visibleWaveform.length;
-        
+
         ctx.beginPath();
         for (let i = 0; i < visibleWaveform.length; i++) {
             const x = i * barWidth;
             const barHeight = visibleWaveform[i] * (height / 2) * 0.9;
-            
+
             // Draw bar from middle
             ctx.fillRect(x, middleY - barHeight / 2, Math.max(barWidth, 1), barHeight);
         }
@@ -1144,11 +1341,15 @@ export class TimelineManager {
         const deltaX = e.clientX - this.trimStartX;
         const deltaTime = deltaX / this.zoom;
 
+        let newStartTime = this.trimClip.startTime;
+        let newDuration = this.trimClip.duration;
+        let newTrimStart = this.trimClip.trimStart;
+
         if (this.trimMode === 'start') {
             // Trim from start
-            let newStartTime = this.trimOriginalStart + deltaTime;
-            let newDuration = this.trimOriginalDuration - deltaTime;
-            let newTrimStart = this.trimOriginalTrimStart + deltaTime;
+            newStartTime = this.trimOriginalStart + deltaTime;
+            newDuration = this.trimOriginalDuration - deltaTime;
+            newTrimStart = this.trimOriginalTrimStart + deltaTime;
 
             // Constraints
             const maxTrim = this.trimOriginalDuration - 0.1; // Minimum 0.1s duration
@@ -1169,13 +1370,9 @@ export class TimelineManager {
                 newStartTime = this.trimOriginalStart - this.trimOriginalTrimStart;
                 newDuration = this.trimOriginalDuration + this.trimOriginalTrimStart;
             }
-
-            this.trimClip.startTime = newStartTime;
-            this.trimClip.duration = newDuration;
-            this.trimClip.trimStart = newTrimStart;
         } else if (this.trimMode === 'end') {
             // Trim from end
-            let newDuration = this.trimOriginalDuration + deltaTime;
+            newDuration = this.trimOriginalDuration + deltaTime;
 
             // Constraints
             if (newDuration < 0.1) {
@@ -1189,8 +1386,17 @@ export class TimelineManager {
                     newDuration = maxDuration;
                 }
             }
+        }
 
-            this.trimClip.duration = newDuration;
+        // Check for triple overlap
+        if (this.checkOverlap(this.trimClip.trackId, newStartTime, newDuration, this.trimClip.id)) {
+            return;
+        }
+
+        this.trimClip.startTime = newStartTime;
+        this.trimClip.duration = newDuration;
+        if (this.trimMode === 'start') {
+            this.trimClip.trimStart = newTrimStart;
         }
 
         // Update DOM
@@ -1204,6 +1410,7 @@ export class TimelineManager {
     }
 
     startGainDrag(e, clip) {
+        this.historyManager.pushState();
         this.isDraggingGain = true;
         this.draggedGainClip = clip;
     }
@@ -1219,7 +1426,7 @@ export class TimelineManager {
         // e.clientY is mouse Y. rect.bottom is bottom Y.
         // Distance from bottom = rect.bottom - e.clientY
         let y = (rect.bottom - e.clientY) / rect.height;
-        
+
         // Clamp y between 0 and 1
         y = Math.max(0, Math.min(1, y));
 
@@ -1228,7 +1435,7 @@ export class TimelineManager {
 
         // Update DOM
         this.updateClipElement(this.draggedGainClip);
-        
+
         // Update properties panel if selected
         if (this.selectedClip && this.selectedClip.id === this.draggedGainClip.id) {
             this.updatePropertiesPanel();

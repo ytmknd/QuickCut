@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,17 +8,20 @@
     <script src="coi-serviceworker.js"></script>
     <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
     <div class="app-container">
         <header class="app-header">
             <div class="logo">QuickCut</div>
             <div class="actions">
+                <button id="undo-btn" class="btn btn-secondary" disabled>Undo (Ctrl+Z)</button>
+                <button id="redo-btn" class="btn btn-secondary" disabled>Redo (Ctrl+Y)</button>
                 <button id="cut-btn" class="btn btn-secondary">Cut Clip (C)</button>
                 <button id="delete-btn" class="btn btn-danger">Delete (Del)</button>
                 <button id="export-btn" class="btn btn-primary">Export Video</button>
             </div>
         </header>
-        
+
         <main class="main-layout">
             <aside class="sidebar-left">
                 <div class="panel-header">Assets</div>
@@ -31,7 +35,7 @@
                     </div>
                 </div>
             </aside>
-            
+
             <section class="preview-area">
                 <div class="preview-container">
                     <canvas id="preview-canvas"></canvas>
@@ -42,7 +46,7 @@
                     </div>
                 </div>
             </section>
-            
+
             <aside class="sidebar-right" id="properties-panel">
                 <div class="panel-header">Properties</div>
                 <div class="properties-content" id="properties-content">
@@ -50,7 +54,7 @@
                 </div>
             </aside>
         </main>
-        
+
         <footer class="timeline-area">
             <div class="timeline-header">
                 <div class="timeline-ruler" id="timeline-ruler">
@@ -74,4 +78,5 @@
 
     <script type="module" src="src/app.js"></script>
 </body>
+
 </html>

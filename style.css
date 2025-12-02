@@ -1,15 +1,17 @@
 :root {
     --bg-dark: #121212;
     --bg-panel: #1e1e1e;
-    --bg-track: #2a2a2a;
-    --accent: #6200ee;
-    --accent-hover: #7c4dff;
     --text-primary: #ffffff;
     --text-secondary: #b0b0b0;
-    --border: #333;
-    --track-video: #3d5afe;
-    --track-audio: #00e676;
-    --playhead: #ff1744;
+    --accent: #2196f3;
+    --accent-hover: #1976d2;
+    --border: #333333;
+    --timeline-bg: #121212;
+    --track-bg: #252525;
+    --ruler-bg: #1e1e1e;
+    --playhead-color: #f44336;
+    --track-video: #546e7a;
+    --track-audio: #43a047;
 }
 
 * {
@@ -169,7 +171,8 @@ body {
     aspect-ratio: 16/9;
 }
 
-.asset-item video, .asset-item img {
+.asset-item video,
+.asset-item img {
     width: 100%;
     height: 100%;
     object-fit: cover;
@@ -180,7 +183,7 @@ body {
     bottom: 0;
     left: 0;
     right: 0;
-    background: rgba(0,0,0,0.7);
+    background: rgba(0, 0, 0, 0.7);
     font-size: 10px;
     padding: 2px 4px;
     white-space: nowrap;
@@ -237,14 +240,14 @@ canvas#preview-canvas {
     max-width: 100%;
     max-height: calc(100vh - 450px);
     background-color: #000;
-    box-shadow: 0 0 20px rgba(0,0,0,0.5);
+    box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
 }
 
 .preview-controls {
     display: flex;
     gap: 15px;
     align-items: center;
-    background: rgba(30,30,30,0.8);
+    background: rgba(30, 30, 30, 0.8);
     padding: 8px 20px;
     border-radius: 20px;
 }
@@ -389,7 +392,8 @@ canvas#preview-canvas {
 .timeline-tracks {
     flex: 1;
     overflow-y: auto;
-    overflow-x: hidden; /* Scroll handled by container logic usually, but here we keep simple */
+    overflow-x: hidden;
+    /* Scroll handled by container logic usually, but here we keep simple */
     position: relative;
     display: flex;
     flex-direction: column;
@@ -409,7 +413,7 @@ canvas#preview-canvas {
     border-radius: 4px;
     overflow: visible;
     cursor: grab;
-    border: 1px solid rgba(255,255,255,0.2);
+    border: 1px solid rgba(255, 255, 255, 0.2);
     transition: border-color 0.2s, box-shadow 0.2s;
 }
 
@@ -492,7 +496,7 @@ canvas#preview-canvas {
     top: 0;
     bottom: 0;
     width: 2px;
-    background-color: var(--playhead);
+    background-color: var(--playhead-color);
     z-index: 10;
     pointer-events: auto;
     cursor: ew-resize;
@@ -508,7 +512,7 @@ canvas#preview-canvas {
     height: 10px;
     border-left: 5px solid transparent;
     border-right: 5px solid transparent;
-    border-top: 10px solid var(--playhead);
+    border-top: 10px solid var(--playhead-color);
     cursor: ew-resize;
 }
 
@@ -521,7 +525,7 @@ canvas#preview-canvas {
     cursor: ns-resize;
     z-index: 10;
     pointer-events: auto;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.5);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
 }
 
 .gain-line:hover {
@@ -548,5 +552,6 @@ canvas#preview-canvas {
 }
 
 .clip.audio .clip-content {
-    pointer-events: none; /* Let clicks pass through to gain line if needed, but we handle z-index */
+    pointer-events: none;
+    /* Let clicks pass through to gain line if needed, but we handle z-index */
 }

@@ -15,7 +15,7 @@ class App {
 
     init() {
         console.log('QuickCut Initialized');
-        
+
         // Check if SharedArrayBuffer is available
         if (typeof SharedArrayBuffer === 'undefined') {
             console.warn('==========================================');
@@ -39,6 +39,23 @@ class App {
             this.previewPlayer.handleResize();
         });
 
+        // Undo/Redo buttons
+        const undoBtn = document.getElementById('undo-btn');
+        if (undoBtn) {
+            undoBtn.addEventListener('click', () => {
+                this.timelineManager.historyManager.undo();
+            });
+        }
+
+        const redoBtn = document.getElementById('redo-btn');
+        if (redoBtn) {
+            redoBtn.addEventListener('click', () => {
+                this.timelineManager.historyManager.redo();
+            });
+        }
+
+
+
         // Cut clip button
         const cutBtn = document.getElementById('cut-btn');
         if (cutBtn) {
@@ -57,31 +74,55 @@ class App {
 
         // Keyboard shortcuts
         window.addEventListener('keydown', (e) => {
+            // console.log('Key pressed:', e.key, 'Ctrl:', e.ctrlKey, 'Meta:', e.metaKey);
             if (e.target.matches('input, textarea')) return;
-            
-            // C key for cut
-            if (e.key === 'c' || e.key === 'C') {
+
+            // C key for cut (Split)
+            if (e.code === 'KeyC') {
                 if (e.ctrlKey || e.metaKey) {
                     // Ctrl+C / Cmd+C for copy
                     e.preventDefault();
                     this.timelineManager.copySelectedClip();
                 } else {
-                    // Just C for cut
+                    // Just C for split (cut at playhead)
                     this.timelineManager.cutClipAtPlayhead();
                 }
             }
+            // Ctrl+X / Cmd+X for Cut (Copy + Delete)
+            else if ((e.ctrlKey || e.metaKey) && (e.code === 'KeyX')) {
+                console.log('Ctrl+X detected');
+                e.preventDefault();
+                this.timelineManager.cutSelectedClip();
+            }
             // Ctrl+V / Cmd+V for paste
-            else if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V')) {
+            else if ((e.ctrlKey || e.metaKey) && (e.code === 'KeyV')) {
                 e.preventDefault();
                 this.timelineManager.pasteClip();
             }
             // Delete or Backspace key for delete
-            else if (e.key === 'Delete' || e.key === 'Backspace') {
+            else if (e.code === 'Delete' || e.code === 'Backspace') {
                 this.timelineManager.deleteSelectedClip();
             }
             // S key to toggle snap
-            else if (e.key === 's' || e.key === 'S') {
+            else if (e.code === 'KeyS') {
                 this.timelineManager.toggleSnap();
+            }
+            // Ctrl+Z for Undo
+            else if ((e.ctrlKey || e.metaKey) && (e.code === 'KeyZ')) {
+                if (e.shiftKey) {
+                    // Ctrl+Shift+Z for Redo
+                    e.preventDefault();
+                    this.timelineManager.historyManager.redo();
+                } else {
+                    // Ctrl+Z for Undo
+                    e.preventDefault();
+                    this.timelineManager.historyManager.undo();
+                }
+            }
+            // Ctrl+Y for Redo
+            else if ((e.ctrlKey || e.metaKey) && (e.code === 'KeyY')) {
+                e.preventDefault();
+                this.timelineManager.historyManager.redo();
             }
         });
     }
