@@ -391,6 +391,7 @@ export class TimelineManager {
             assetId: asset.id,
             startTime: startTime,
             duration: duration,
+            trimStart: 0,
             trackId: trackId,
             type: asset.type === 'image' ? 'video' : asset.type, // Treat images as video clips
             isImage: asset.type === 'image',
@@ -1381,7 +1382,8 @@ export class TimelineManager {
             // Don't extend beyond original video duration
             const asset = this.app.assetsManager.getAssetById(this.trimClip.assetId);
             if (asset && asset.duration) {
-                const maxDuration = asset.duration - this.trimClip.trimStart;
+                const currentTrimStart = this.trimClip.trimStart || 0;
+                const maxDuration = asset.duration - currentTrimStart;
                 if (newDuration > maxDuration) {
                     newDuration = maxDuration;
                 }
