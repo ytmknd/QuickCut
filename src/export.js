@@ -240,6 +240,103 @@ export class Exporter {
         });
     }
 
+    async exportSingleClip(clip, filename) {
+        if (this.isExporting) {
+            alert('他のエクスポート処理が実行中です。');
+            return;
+        }
+
+        this.isExporting = true;
+        this.abortController = new AbortController();
+        const signal = this.abortController.signal;
+        
+        const originalText = this.exportBtn.textContent;
+        this.exportBtn.textContent = 'クリップ保存中...';
+        
+        try {
+            await this.loadFFmpeg(signal);
+            if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+
+            const asset = this.app.assetsManager.getAssetById(clip.assetId);
+            const data = await this.fetchFile(asset.url);
+            const ext = this.getFileExtension(asset.name);
+            const inputFilename = `input${ext}`;
+            await this.ffmpeg.writeFile(inputFilename, data);
+
+            const trimStart = clip.trimStart || 0;
+            const duration = clip.duration;
+            
+            let outputFilename;
+            let args;
+            let mimeType;
+
+            if (clip.type === 'audio') {
+                // Audio export (MP3)
+                outputFilename = filename.endsWith('.mp3') ? filename : `${filename}.mp3`;
+                mimeType = 'audio/mpeg';
+                
+                args = [
+                    '-ss', trimStart.toString(),
+                    '-i', inputFilename,
+                    '-t', duration.toString(),
+                    '-vn', // No video
+                    '-c:a', 'libmp3lame',
+                    '-q:a', '2', // High quality VBR
+                    outputFilename
+                ];
+            } else {
+                // Video export (MP4)
+                outputFilename = filename.endsWith('.mp4') ? filename : `${filename}.mp4`;
+                mimeType = 'video/mp4';
+                
+                args = [
+                    '-ss', trimStart.toString(),
+                    '-i', inputFilename,
+                    '-t', duration.toString(),
+                    '-c:v', 'libx264',
+                    '-preset', 'ultrafast',
+                    '-c:a', 'aac',
+                    outputFilename
+                ];
+            }
+
+            console.log('Exporting clip with args:', args);
+            
+            await this.ffmpeg.exec(args);
+            
+            if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+
+            const outputData = await this.ffmpeg.readFile(outputFilename);
+            const blob = new Blob([outputData.buffer], { type: mimeType });
+            const url = URL.createObjectURL(blob);
+            
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = outputFilename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            
+            setTimeout(() => URL.revokeObjectURL(url), 100);
+            
+            // Cleanup
+            await this.ffmpeg.deleteFile(inputFilename);
+            await this.ffmpeg.deleteFile(outputFilename);
+            
+        } catch (e) {
+            if (e.name === 'AbortError' || e.message === 'Aborted') {
+                console.log('Export aborted by user');
+            } else {
+                console.error('Export clip failed:', e);
+                alert('クリップの保存に失敗しました: ' + e.message);
+            }
+        } finally {
+            this.isExporting = false;
+            this.exportBtn.textContent = originalText;
+            this.abortController = null;
+        }
+    }
+
     async exportVideo() {
         const clips = this.app.timelineManager.getAllClips();
         if (clips.length === 0) {

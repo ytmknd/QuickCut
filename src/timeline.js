@@ -43,6 +43,7 @@ export class TimelineManager {
 
         this.historyManager = new HistoryManager(this);
 
+        this.createContextMenu();
         this.initListeners();
         this.renderRuler();
     }
@@ -98,6 +99,12 @@ export class TimelineManager {
             this.isScrubbing = true;
         });
 
+        // Sync ruler scroll with tracks scroll
+        this.tracksContainer.addEventListener('scroll', () => {
+            const scrollLeft = this.tracksContainer.scrollLeft;
+            this.ruler.style.transform = `translateX(-${scrollLeft}px)`;
+        });
+
         // Drag and drop on tracks
         const trackEls = document.querySelectorAll('.track');
         trackEls.forEach(trackEl => {
@@ -131,6 +138,7 @@ export class TimelineManager {
 
         // Scrubbing and clip dragging on tracks area
         this.tracksContainer.addEventListener('mousedown', (e) => {
+            if (e.button === 2) return; // Ignore right click for mousedown
             if (e.target.classList.contains('trim-handle-start')) {
                 if (!this.isInteractive) return;
                 // Start trimming from start
@@ -218,7 +226,204 @@ export class TimelineManager {
             this.draggedGainClip = null;
         });
 
+        // Context Menu
+        this.tracksContainer.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            const clipEl = e.target.closest('.clip');
+            if (clipEl) {
+                const clipId = clipEl.dataset.id;
+                let clip = null;
+                for (const trackId in this.tracks) {
+                    clip = this.tracks[trackId].find(c => c.id === clipId);
+                    if (clip) break;
+                }
+                
+                if (clip) {
+                    // If the clicked clip is not in the current selection, select it (and deselect others)
+                    const isSelected = this.selectedClips.some(c => c.id === clip.id);
+                    if (!isSelected) {
+                        this.selectClip(clip, false);
+                    }
+                    
+                    this.showContextMenu(e.clientX, e.clientY, clip);
+                }
+            }
+        });
 
+        document.addEventListener('click', (e) => {
+            if (this.contextMenu && !this.contextMenu.contains(e.target)) {
+                this.hideContextMenu();
+            }
+        });
+    }
+
+    createContextMenu() {
+        this.contextMenu = document.createElement('div');
+        this.contextMenu.className = 'context-menu';
+        this.contextMenu.style.display = 'none';
+        
+        // Save Clip Item
+        this.saveClipItem = document.createElement('div');
+        this.saveClipItem.className = 'context-menu-item';
+        this.saveClipItem.textContent = 'クリップを名前を付けて保存';
+        this.saveClipItem.addEventListener('click', () => {
+            if (this.contextMenuClip) {
+                const filename = prompt('ファイル名を入力してください', 'clip');
+                if (filename) {
+                    this.app.exporter.exportSingleClip(this.contextMenuClip, filename);
+                }
+            }
+            this.hideContextMenu();
+        });
+        this.contextMenu.appendChild(this.saveClipItem);
+
+        // Merge Clips Item
+        this.mergeClipsItem = document.createElement('div');
+        this.mergeClipsItem.className = 'context-menu-item';
+        this.mergeClipsItem.textContent = 'クリップを連結';
+        this.mergeClipsItem.addEventListener('click', () => {
+            this.mergeSelectedClips();
+            this.hideContextMenu();
+        });
+        this.contextMenu.appendChild(this.mergeClipsItem);
+
+        // Cut Clip Item
+        this.cutClipItem = document.createElement('div');
+        this.cutClipItem.className = 'context-menu-item';
+        this.cutClipItem.textContent = '再生ヘッド位置で分割';
+        this.cutClipItem.addEventListener('click', () => {
+            if (this.contextMenuClip) {
+                this.performCut(this.contextMenuClip, this.currentTime);
+            }
+            this.hideContextMenu();
+        });
+        this.contextMenu.appendChild(this.cutClipItem);
+
+        document.body.appendChild(this.contextMenu);
+    }
+
+    showContextMenu(x, y, clip) {
+        this.contextMenuClip = clip;
+        
+        // Determine which items to show
+        let showSave = false;
+        let showMerge = false;
+        let showCut = true;
+
+        // Show Save if single video/audio clip
+        if (this.selectedClips.length <= 1) {
+            if ((clip.type === 'video' || clip.type === 'audio') && !clip.isImage) {
+                showSave = true;
+            }
+        }
+
+        // Show Merge if exactly 2 clips selected
+        if (this.selectedClips.length === 2) {
+            showMerge = true;
+        }
+
+        // Validate cut time (must be within clip duration, not at edges)
+        // Check if playhead is within the clip
+        const margin = 0.05;
+        if (this.currentTime <= clip.startTime + margin || this.currentTime >= clip.startTime + clip.duration - margin) {
+            showCut = false;
+        }
+
+        this.saveClipItem.style.display = showSave ? 'block' : 'none';
+        this.mergeClipsItem.style.display = showMerge ? 'block' : 'none';
+        this.cutClipItem.style.display = showCut ? 'block' : 'none';
+
+        if (!showSave && !showMerge && !showCut) return;
+
+        // Adjust position to keep within viewport
+        let left = x;
+        let top = y;
+        
+        // We need to show it to get dimensions, but visibility hidden
+        this.contextMenu.style.visibility = 'hidden';
+        this.contextMenu.style.display = 'block';
+        
+        const menuRect = this.contextMenu.getBoundingClientRect();
+        const winWidth = window.innerWidth;
+        const winHeight = window.innerHeight;
+        
+        if (left + menuRect.width > winWidth) {
+            left = winWidth - menuRect.width - 10;
+        }
+        
+        if (top + menuRect.height > winHeight) {
+            top = winHeight - menuRect.height - 10;
+        }
+        
+        this.contextMenu.style.left = `${left}px`;
+        this.contextMenu.style.top = `${top}px`;
+        this.contextMenu.style.visibility = 'visible';
+    }
+
+    mergeSelectedClips() {
+        if (this.selectedClips.length !== 2) return;
+
+        // Sort by start time
+        const sortedClips = [...this.selectedClips].sort((a, b) => a.startTime - b.startTime);
+        const first = sortedClips[0];
+        const second = sortedClips[1];
+
+        // 1. Check if on same track
+        if (first.trackId !== second.trackId) {
+            alert('同じトラック上のクリップのみ連結できます。');
+            return;
+        }
+
+        // 2. Check adjacency (allow small gap/overlap due to float precision)
+        const gap = Math.abs(second.startTime - (first.startTime + first.duration));
+        if (gap > 0.1) { // 0.1s tolerance
+            // Ignore non-adjacent clips as requested
+            console.log('Clips are not adjacent, ignoring merge request.');
+            return;
+        }
+
+        // 3. Check if same asset
+        if (first.assetId !== second.assetId) {
+            alert('同じ素材（アセット）のクリップのみ連結できます。');
+            return;
+        }
+
+        // 4. Check if continuous in source time
+        // The end of first clip in source time should match start of second clip in source time
+        const firstEndSource = (first.trimStart || 0) + first.duration;
+        const secondStartSource = (second.trimStart || 0);
+        
+        if (Math.abs(firstEndSource - secondStartSource) > 0.1) {
+             alert('元動画の連続した部分ではないため連結できません。');
+             return;
+        }
+
+        // Perform Merge
+        this.historyManager.pushState();
+
+        // Extend first clip
+        first.duration += second.duration;
+
+        // Remove second clip
+        const track = this.tracks[second.trackId];
+        const idx = track.indexOf(second);
+        if (idx > -1) {
+            track.splice(idx, 1);
+        }
+
+        // Update selection to just the merged clip
+        this.selectedClips = [first];
+        
+        // Update DOM
+        this.updateAllClips();
+        this.updatePropertiesPanel();
+    }
+
+    hideContextMenu() {
+        if (this.contextMenu) {
+            this.contextMenu.style.display = 'none';
+        }
+        this.contextMenuClip = null;
     }
 
     startClipDrag(e) {
@@ -377,7 +582,11 @@ export class TimelineManager {
 
     addClip(trackId, asset, startTime) {
         this.historyManager.pushState();
-        const duration = asset.duration || 5; // Use asset duration or default 5s
+        
+        // Get the latest asset info from manager to ensure we have the duration
+        // (in case it was loaded after drag started)
+        const storedAsset = this.app.assetsManager.getAssetById(asset.id);
+        const duration = (storedAsset && storedAsset.duration) ? storedAsset.duration : (asset.duration || 5);
 
         // Check for triple overlap
         if (this.checkOverlap(trackId, startTime, duration, [])) {
@@ -532,7 +741,27 @@ export class TimelineManager {
         const totalWidth = this.duration * this.zoom;
         this.ruler.style.width = `${totalWidth}px`;
 
-        for (let i = 0; i <= this.duration; i += 5) {
+        // Update tracks width to match ruler
+        const tracks = this.tracksContainer.querySelectorAll('.track');
+        tracks.forEach(track => {
+            track.style.width = `${totalWidth}px`;
+        });
+
+        // Dynamic step size based on zoom
+        // We want ticks roughly every 100px
+        let step = 100 / this.zoom;
+        
+        // Round step to nice numbers
+        if (step < 1) step = 1;
+        else if (step < 2) step = 2;
+        else if (step < 5) step = 5;
+        else if (step < 10) step = 10;
+        else if (step < 30) step = 30;
+        else if (step < 60) step = 60;
+        else if (step < 300) step = 300; // 5 min
+        else step = 600; // 10 min
+
+        for (let i = 0; i <= this.duration; i += step) {
             const tick = document.createElement('div');
             tick.style.position = 'absolute';
             tick.style.left = `${i * this.zoom}px`;
@@ -1071,9 +1300,13 @@ export class TimelineManager {
     }
 
     adjustZoom(delta) {
-        const step = 2;
-        let newZoom = this.zoom + (delta * step);
-        newZoom = Math.max(5, Math.min(50, newZoom));
+        // Multiplicative zoom for better feel over large range
+        const factor = delta > 0 ? 1.2 : 0.8;
+        let newZoom = this.zoom * factor;
+        
+        // Clamp
+        newZoom = Math.max(0.1, Math.min(200, newZoom));
+        
         this.setZoom(newZoom);
     }
 

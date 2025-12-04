@@ -63,6 +63,18 @@ export class AssetsManager {
             duration: type === 'image' ? 30 : undefined // Default 30 seconds for images
         };
 
+        // For audio files, try to get duration from metadata immediately
+        if (type === 'audio') {
+            const audio = new Audio(url);
+            audio.preload = 'metadata';
+            audio.addEventListener('loadedmetadata', () => {
+                if (!asset.duration) {
+                    asset.duration = audio.duration;
+                    console.log('Audio duration loaded from metadata:', asset.duration);
+                }
+            });
+        }
+
         this.assets.push(asset);
         this.renderAsset(asset);
         
